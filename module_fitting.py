@@ -112,9 +112,6 @@ class Spread:
         '''This calculates the spreads, defined as log(p_A) - gamma · log(p_B), where gamma is the slope of the
         regression of log(p_A(t)/p_A(t-1))-vs-log(p_B(t)/p_B(t-1)). This is calculated for (A=label_x, B=label_y) and vice versa.'''
 
-        #DEV: Esta función calcula como se espera. Ahora bien, cuál es el significado de esto, y si las gammas están bien puestas,
-        # eso habrá que revisarlo. Esto lo que da es exactamente lo q dice la explicación más arriba. XXX
-
         label_xregr = self.label_x + "_" + self.name_col_correlation
         label_yregr = self.label_y + "_" + self.name_col_correlation
         self.regr_ret_y_vs_x = self.OLS_regression(label_xregr, label_yregr)
@@ -271,7 +268,12 @@ def update_stationarity_df( df_inout, my_spread ):
     df_aux[1] = list(my_spread.stationarity_Spread_x_vs_y.values())
     df_aux = df_aux.T
     df_aux.rename(columns = { 0:'products',1:'quantity',2:'test-statistcs',3:'pvalue',4:'probably_stationary'}, inplace = True)
-    df_inout = df_inout.append(df_aux)
+
+    #df_inout = df_inout.append(df_aux)
+    df_inout = pd.concat( [df_inout,df_aux],axis=0, ignore_index=True)
+
+    #print(df_inout, "\n")
+
     del my_spread; del df_aux
 
     return df_inout
@@ -391,10 +393,7 @@ class FittedTimeSeries:
         self.directory_output_plots = input_params.ts_directory+"/Spreads/Spreads_"+input_params.list_product_labels_name+"/Plots/Fitting_parameters"
         self.is_bond = input_params.is_bond  # If True, we have to convert yields to prices. We do it with assuming zero-coupon, i.e. with Price = 1/(1+Yield)^TTM
         self.efficient_fit_to_levy_stable = input_params.efficient_fit_to_levy_stable
-
-        #self.make_plots = input_params.make_plots
-        #self.only_plots = input_params.only_plots
-
+        self.only_plots = input_params.only_plots
         self.filename = filename
         if not (path.exists(self.directory_output_data)): makedirs(self.directory_output_data)
         if not (path.exists(f"{self.directory_output_data}Plots")): makedirs(f"{self.directory_output_data}Plots")
@@ -408,7 +407,7 @@ class FittedTimeSeries:
         self.fitting_param_tails2 = None  # This is not used for nct function, and << b >> parameter for generalized hyperbolic
         self.consider_p = input_params.consider_p
         self.consider_skewness = input_params.consider_skewness
-        self.truncation_limit = -70  # xxx: Check if this value is appropriate! For yields, making it 0.7 led to reasonable results. This should ideally depend on the actual product, looking at its lowest value of the past.
+        self.truncation_limit = -70  # xx: Check if this value is appropriate! For yields, making it 0.7 led to reasonable results. This should ideally depend on the actual product, looking at its lowest value of the past.
         self.alpha_for_ES = 0.025
         self.ttm = time_to_maturity
         self.calculation_mode = input_params.calculation_mode
@@ -543,8 +542,9 @@ class FittedTimeSeries:
 
     # Plotting the fitting
     def plot_fitting(self,plot_several_curves=False, params_several_curves=None):
-        from module_plots import plot_histogram
-        plot_histogram(self, plot_several_curves, params_several_curves)
+        if (not self.only_plots):
+            from module_plots import plot_histogram
+            plot_histogram(self, plot_several_curves, params_several_curves)
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -831,7 +831,8 @@ def fit_residuals(input_params):
             for distrib_type in input_params.list_distribution_types:
                 fitting_parameters = mydataset.fit_to_distribution( distrib_type )
                 update_df_fitting_parameters( file_fit_path, filename_resid, dir_fitting_data+filename_OrnUhl_params, fitting_parameters)
-                if (input_params.make_plots): mydataset.plot_fitting()
+                if ((input_params.make_plots) and (not input_params.only_plots)):
+                    mydataset.plot_fitting()
         print(" * Fitting results saved to " + file_fit_path)
         del mydataset; del distrib_type; del i; del file_fit_path
 
@@ -881,7 +882,7 @@ def first_iteration(dataset_in, distrib_type, consider_skewness, loc_param0, sca
             tail_param1 = tail_param0 + step * grad_tail0
             form_param1 = form_param0 + step * grad_form0
             # Old version: The line below had "levy_stable.pdf"
-            loss1 = - (np.sum(np.log(genhyperbolic.pdf(dataset_in, loc=loc_param1, scale=sca_param1, beta=skewness_param1, alpha=tail_param1)))) / len(dataset_in)
+            loss1 = - (np.sum(np.log(genhyperbolic.pdf(dataset_in, loc=loc_param1, scale=sca_param1, b=skewness_param1, a=tail_param1, p=form_param1)))) / len(dataset_in)
             if not (isnan(loss1)):break
     elif (distrib_type == "levy_stable"):
         from module_fitting_stable import calculate_gradient_params
@@ -924,7 +925,7 @@ def first_iteration(dataset_in, distrib_type, consider_skewness, loc_param0, sca
 
     if ((((distrib_type != "levy_stable") or (loss_opt >= factor_accept * loss0)  )) ):
 
-        if (distrib_type != "genhyperbolic"): loss1=np.float('NaN')
+        if (distrib_type != "genhyperbolic"): loss1=float('NaN') #np.float('NaN')
         count = 0; max_count = 50
         while (count <= max_count) :
             if not (isnan(loss1)):

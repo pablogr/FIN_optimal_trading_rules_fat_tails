@@ -19,8 +19,14 @@ def find_quantity_to_optimize( quantity, profit_mean, profit_std  ):
 
 #---------------------------------------------------------------------------------------------------------------------
 
+'''
+
+# Logarithm of the discount factor per unit time (e.g. per day if each row of the inputted time series corresponds to one day). If absent or set to None or to zero then discount factor is 1 (i.e. no discount factor is applied). For example, if set to log(1/(1+0.04))/365 being the periodicity one day, it corresponds to a one-year discount rate of 4%. 
+#log_discount_factor_unit_time =  log(1/(1+0.04))/365
+#discount_factor_update_method = "weekly"
+
 def update_discount_factor( DF, iteration, discount_factor_unit_time, discount_factor_update_method ):
-    '''This function updates the discount factor'''
+    #This function updates the discount factor
 
     if ( (discount_factor_unit_time==0) or (discount_factor_unit_time==None) ):
         return 1
@@ -34,7 +40,7 @@ def update_discount_factor( DF, iteration, discount_factor_unit_time, discount_f
             return DF * discount_factor_unit_time
     else:
         raise Exception("\nERROR: Unrecognized disctounting periodicity "+str(discount_factor_update_method)+"\n")
-
+'''
 #---------------------------------------------------------------------------------------------------------------------
 
 def adapt_lists_thresholds(input_params, enter_value):
@@ -222,8 +228,9 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
     strategy_duration = input_params.strategy_duration
     delt = 0.00000000000000001
     size_array_rv = 8000
+    tcrate = input_params.transaction_costs_rate  # rate for transaction cost (to be used in the calculation of transaction costs in units of spread)
+    discount_rate = input_params.discount_rate    # Rate for discounting the value of the profits
     arr_profit = [] # To store the profits
-    DFunit = np.exp( input_params.log_discount_factor_unit_time )
     t_in = None; p_in = None;
     ornuhl_slope = OU_params['phi']
     enter_value += OU_params['E0']    # We define the "enter_value" with respect to the mean-reverting mean
@@ -254,15 +261,14 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
             if ((j%size_array_rv )==0): rv_array = generate_random_variable(input_params.evolution_type, rv_params, size_array_rv, j/size_array_rv )
             rv = rv_array[j%size_array_rv]
 
-            p = ornuhl_y0 + ornuhl_slope * p + rv # p = (1-OU_params['phi'])*OU_params['E0'] + OU_params['phi']*p + rv    Price(t) given by the discretized Ornstein-Uhlenbeck equation
-            #print(time_,")",p)
+            p = ornuhl_y0 + ornuhl_slope * p + rv # p is the SPREAD (not a price). Also: p = (1-OU_params['phi'])*OU_params['E0'] + OU_params['phi']*p + rv
 
             # Poisson event
             if (poisson_probability != None):
                 if ((j % size_array_rv) == 0): rv_poisson_array = uniform.rvs(size=size_array_rv)
                 if (rv_poisson_array[j % size_array_rv] > 1 - poisson_probability):
                     if (rv_poisson_array[j % size_array_rv] > 1 - poisson_probability/2 ): # We assign 50% probability to increase or decrease of E0
-                         E0 *= (1 + input_params.new_value_after_poisson_event_increase)  # xxx check!
+                         E0 *= (1 + input_params.new_value_after_poisson_event_increase)  # xx CHECK!
                     else:
                          E0 *= (1 + input_params.new_value_after_poisson_event_decrease)
                     ornuhl_y0 = (1 - OU_params['phi']) * E0
@@ -278,8 +284,13 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
                     #print("p=",p,"Now entering")
             else: # We are invested, hence we seek to unwind our position
                 if ( ( time_-t_in > horizon ) or (time_ == strategy_duration-1) or ((enter_value < OU_params['E0']) and ( (p > pt) or (p < sl) ) ) or ((enter_value >= OU_params['E0']) and ( (p < pt) or (p > sl) ) )  ):
-                    DF = 1 #xxx update_discount_factor(DF, time_, DFunit, input_params.discount_factor_update_method)
-                    iter_profit += (p - p_in)*DF
+                    #DF = 1 #update_discount_factor(DF, time_, DFunit, input_params.discount_factor_update_method)
+                    if (tcrate!=None): tc = np.log( 1 - tcrate * ((time_-t_in+1+int((time_-t_in)/5)*2)/365) ) # transaction cost (in units of spread)
+                    else: tc = 0
+                    if (discount_rate!=None): DF = np.exp( - discount_rate * ((time_+1+int((time_)/5)*2)/365)  )
+                    else: DF = 1
+                    #print("Ndays=",(time_+1+int((time_)/5)*2),"; DF=", DF, "antes=", (p - p_in + tc), "; despues=", (p - p_in + tc) * DF)
+                    iter_profit += (p - p_in + tc)*DF
                     #print("Now exiting with a profit of", iter_profit, "(", p_in, ";", p, "last profit was",p-p_in,")\n")
                     invested = False
                     p_in = None
@@ -350,10 +361,11 @@ def find_thresholds_ensured_enter_OU( mh, enter_value, pt, sl, input_params, OU_
     enter_value += E0   # We define the "enter_value" with respect to the mean-reverting mean
     pt += E0; sl += E0  # Correspondingly, we must also offset the profit-taking and stop-loss parameters, because they are defined wrt to the enter_value (see function adapt_lists_thresholds).
 
+    tcrate = input_params.transaction_costs_rate  # rate for transaction cost (to be used in the calculation of transaction costs in units of spread)
+    discount_rate = input_params.discount_rate    # Rate for discounting the value of the profits
     size_array_rv = 8000
     arr_profit = []
     array_check_convergence = [-999,999]
-    DFunit = np.exp( input_params.log_discount_factor_unit_time )
     ornuhl_y0 = (1 - OU_params['phi']) * OU_params['E0']
     ornuhl_slope = OU_params['phi']
 
@@ -368,7 +380,6 @@ def find_thresholds_ensured_enter_OU( mh, enter_value, pt, sl, input_params, OU_
 
         time_ = 0
         p  = enter_value
-        DF = 1
 
         while True:
 
@@ -388,8 +399,12 @@ def find_thresholds_ensured_enter_OU( mh, enter_value, pt, sl, input_params, OU_
 
             #cP=(p - enter_value); if ( ( cP > pt ) or ( cP < sl ) or ( time_ > mh ) ): # MLdP original: << cP<-comb_[1] (i.e. sl) >> (negative sign)
             if (( time_ > mh ) or ((enter_value < E0) and ((p > pt) or (p < sl))) or ((enter_value >= E0) and ((p < pt) or (p > sl)))):
-                DF = 1 #xxx update_discount_factor(DF, time_, DFunit, input_params.discount_factor_update_method)
-                arr_profit.append( (p - enter_value)*DF )
+                #DF = 1 # update_discount_factor(DF, time_, DFunit, input_params.discount_factor_update_method)
+                if (tcrate != None):  tc = np.log(1 - tcrate * ( (time_ + 1 + int((time_) / 5) * 2) / 365))  # transaction cost (in units of spread)
+                else: tc = 0
+                if (discount_rate != None):  DF = np.exp(- discount_rate * ((time_ + 1 + int((time_) / 5) * 2) / 365))
+                else: DF = 1
+                arr_profit.append( (p - enter_value + tc)*DF )
                 #print(time_,")",(p - enter_value) )
                 break
 
@@ -402,7 +417,7 @@ def find_thresholds_ensured_enter_OU( mh, enter_value, pt, sl, input_params, OU_
                 array_check_convergence[ round(iter_/4) % 2] = sum_final_prices/iter_
                 #print(iter_, array_check_convergence, "  ",abs(array_check_convergence[0] - array_check_convergence[1]))
                 if ( abs(array_check_convergence[0]-array_check_convergence[1]) < tolerance ): break
-                #xxx DEV: uncomment in the final version! if (iter_==4*min_num_trials): print("WARNING: For params "+str(pt)+", "+str(sl)+" the convergence (with tolerance "+str(tolerance)+") was not attained after",iter_,"trials. ")
+                if (iter_==4*min_num_trials): print("WARNING: For params "+str(pt)+", "+str(sl)+" the convergence (with tolerance "+str(tolerance)+") was not attained after",iter_,"trials. ")
 
     results = find_measures(arr_profit)
 
@@ -424,8 +439,8 @@ def find_thresholds_single( mh, pt, sl, input_params, rv_params, min_num_trials,
     size_array_rv = 8000
     arr_profit = []
     array_check_convergence = [-999,999]
-    DFunit = np.exp( input_params.log_discount_factor_unit_time )
-
+    tcrate = input_params.transaction_costs_rate  # rate for transaction cost
+    discount_rate = input_params.discount_rate  # Rate for discounting the value of the profits
     poisson_probability = input_params.poisson_probability
     value_after_poisson = input_params.new_value_after_poisson_event
     rv_poisson_array = None
@@ -437,7 +452,6 @@ def find_thresholds_single( mh, pt, sl, input_params, rv_params, min_num_trials,
 
         time_ = 0
         p  = 1
-        DF = 1
 
         while True:
 
@@ -459,8 +473,12 @@ def find_thresholds_single( mh, pt, sl, input_params, rv_params, min_num_trials,
             time_ += 1; j+=1
 
             if (( time_ > mh ) or (p >= pt) or (p <= sl)):
-                DF = 1 #xxx update_discount_factor(DF, time_, DFunit, input_params.discount_factor_update_method)
-                arr_profit.append(  p * DF - 1 ) #( p**(252/time_) ) * DF
+                #DF = 1 # update_discount_factor(DF, time_, DFunit, input_params.discount_factor_update_method)
+                if (tcrate != None): tc =  - tcrate * ( (time_ + 1 + int((time_) / 5) * 2) / 365)   # transaction cost (in units of spread)
+                else: tc = 0
+                if (discount_rate != None):  DF = np.exp(- discount_rate * ((time_ + 1 + int((time_) / 5) * 2) / 365))
+                else: DF = 1
+                arr_profit.append(  (( p + tc )*DF  - 1) ) #MAKE SURE THAT THE DF IS PROPERLY LOCATED THERE # ( p**(252/time_) ) * DF
                 #print("Exiting: params:",pt,sl,"; earning: ",p-1,"\n")
                 break
 

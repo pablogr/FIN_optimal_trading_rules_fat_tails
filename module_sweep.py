@@ -53,10 +53,7 @@ def read_rv_params(input_params, prod_label, distr ):
 
 def sweep_enptsl_parameters( input_params ):
     ''' This function performs the calculation of finding the optimal trading strategy, i.e. to find the profit-taking
-    and stop-loss thresholds, for given lists of both input parameters, as well as lists of the 3 input parameters which
-    characterize the Ornstein-Ulhenbeck (O-U) stochastic differential equation.
-
-    input_params is a class which contains the following fields:
+    and stop-loss thresholds, for given input parameters. input_params belongs to a class which contains the following fields (among others):
 
     :param list_E0: List of the values of the mean-reversion (E0) parameter of the O-U equation.
     :param list_tau: List of values of the half-life parameter (which determines the speed parameter) in the O-U equation.

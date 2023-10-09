@@ -67,7 +67,8 @@ def plot_2D( datafile_path, output_dir, plot_name, quantity_x, quantity_y, quant
     # Reading the data
     df0 = pd.read_csv( datafile_path, header=0 , usecols=[quantity_x, quantity_y] )
     print(datafile_path,"\n",df0)
-    arr_x = df0[quantity_x]; arr_y = df0[quantity_y]
+    arr_x = df0[quantity_x];
+    arr_y = df0[quantity_y];
     text=""
 
     # Actual plotting
@@ -78,7 +79,7 @@ def plot_2D( datafile_path, output_dir, plot_name, quantity_x, quantity_y, quant
         label_x = quantity_x
     plt.xlabel( label_x, fontsize=16)
     try:
-        plt.ylabel( "Sharpe ratio", fontsize=16) #xxx plt.ylabel( axes_text[quantity_y], fontsize=16)
+        plt.ylabel( axes_text[quantity_y], fontsize=16)
     except KeyError:
         plt.ylabel( quantity_y, fontsize=16)
     ax.tick_params(axis='both', which='major', labelsize=11)
@@ -96,15 +97,20 @@ def plot_2D( datafile_path, output_dir, plot_name, quantity_x, quantity_y, quant
     #ax.plot( [arr_x[0],arr_x[660]], [1,1], '-',   color='#ff4500', linewidth=3.5 )
     #ax.plot([arr_x[720], arr_x[2380]], [1.18, 1.18], '-',  color='#ff4500', linewidth=3.5)
     #ax.plot([arr_x[2510], arr_x[len(arr_x)-1]], [1.412, 1.412], '-',  color='#ff4500', linewidth=3.5)
-    ax.plot(arr_x, arr_y, "o", label=legend_text, color=color1, linewidth=2, markersize=5)
+    if (quantity_x == "Date"):
+        ax.plot(arr_x, arr_y, "-", label=legend_text, color=color1, linewidth=2 )
+    else:
+        ax.plot(arr_x, arr_y, "o", label=legend_text, color=color1, linewidth=2, markersize=5)
     text = "-and-" + str(quantity_y2)
-    try:
-        x_smooth = np.linspace(arr_x.min(), arr_x.max(), 300)
-        y_smooth = np.array(make_interp_spline(arr_x, arr_y)(x_smooth))
-        ax.plot(x_smooth, y_smooth, '-', color=color1, linewidth=2.2)
-        del x_smooth; del y_smooth
-    except ValueError:
-        print("\nWARNING: Unable to perform the interpolation of " + quantity_y2 + "-vs-" + quantity_x + "\n")
+
+    if (quantity_x != "Date"):
+        try:
+            x_smooth = np.linspace(arr_x.min(), arr_x.max(), 300) #
+            y_smooth = np.array(make_interp_spline(arr_x, arr_y)(x_smooth))
+            ax.plot(x_smooth, y_smooth, '-', color=color1, linewidth=2.2)
+            del x_smooth; del y_smooth
+        except ValueError:
+            print("\nWARNING: Unable to perform the interpolation of " + quantity_y2 + "-vs-" + quantity_x + "\n")
 
 
     if (quantity_y2!=None):
@@ -657,6 +663,8 @@ def convert_df_for_heatmap(df_in, x_axis_name, y_axis_name, repr_column_name="Sh
         rescaling = 1
 
     df_in = pd.DataFrame(df_in[repr_column_name])
+    print("Nombres",x_axis_name,y_axis_name)
+    print("PRIMERO\n",df_in)
 
     df1 = df_in.copy().reset_index()
     list_x = df1[x_axis_name].drop_duplicates().values.tolist()
@@ -664,10 +672,19 @@ def convert_df_for_heatmap(df_in, x_axis_name, y_axis_name, repr_column_name="Sh
 
     if (y_axis_name in ["max_horizon", "profit_taking_param"]): list_y.sort(reverse=True)
 
+
+    #pd.set_option('display.max_rows', 500); pd.set_option('display.max_columns', 500) ; pd.set_option('display.width', 1000)
+    #print(df_in)
+    for miind in df_in.index:
+        print(miind, df_in.loc[miind, repr_column_name])
+    print("\n\n\n\n")
+
+
     data_in_chessboard = []
     for y in list_y:
         li_aux = []
         for x in list_x:
+            print(x,y,":",df_in.loc[(x, y), repr_column_name])
             li_aux.append( rescaling * (df_in.loc[(x, y), repr_column_name]) )
         data_in_chessboard.append(li_aux)
 
@@ -705,6 +722,7 @@ def plot_heatmaps_pt_vs_en( input_params, list_quant_plot=["Sharpe_ratio","Sharp
         for distrib in ['norm', 'nct', 'genhyperbolic', 'levy_stable']:
             filepath = 'Output/Output_trading_rules/Results/OrnUhl-spr_resid_'+filecode+'-'+distrib+'.csv'
             if not (path.exists(filepath)):
+                print("WARNING:",filepath,"not found. Unable to plot heatmap.\n")
                 continue
             df_results = pd.read_csv(filepath)
             if ( len( pd.DataFrame(df_results["enter_value"]).drop_duplicates() ) == 1 ): continue
@@ -773,8 +791,8 @@ def plot_one_heatmap(df_results, plot_path, quantity_to_plot, quant_fixed1, valu
         for ind in df1.index:
             try:
                 if (isinstance(df1.loc[ind,col_name], str)):
-                    df1.loc[ind,col_name] = np.float( df1.loc[ind,col_name])
-                if (abs( np.float( df1.loc[ind,col_name]) )<0.0000000000001):
+                    df1.loc[ind,col_name] = float( df1.loc[ind,col_name])
+                if (abs( float( df1.loc[ind,col_name]) )<0.0000000000001):
                     df1.loc[ind, col_name] = 0
             except TypeError:
                 raise Exception("\nERROR: Problem with the indices; index="+str(ind)+"colname="+col_name+"df="+str(df1.loc[ind,col_name])+"\n")
@@ -787,14 +805,14 @@ def plot_one_heatmap(df_results, plot_path, quantity_to_plot, quant_fixed1, valu
     else:
         periodicity_x = 1
     if (len(li_y) > 1):
-        periodicity_y = round(max(((np.float(li_y[-1]) - np.float(li_y[0])) / (5 * ( np.float(li_y[1]) - np.float(li_y[0]) ))), 2))
+        periodicity_y = round(max(((float(li_y[-1]) - float(li_y[0])) / (5 * ( float(li_y[1]) - float(li_y[0]) ))), 2))
     else:
         periodicity_y = 1
     li_x1 = ["{:.3f}".format(li_x[i]) if ((i % periodicity_x) == 0) else None for i in range(len(li_x))]
     if (quant_sweep_y == "max_horizon"):
         li_y1 = ["{:.0f}".format(li_y[i]) if ((i % periodicity_y) == 0) else None for i in range(len(li_y))]
     else:
-        li_y1 = ["{:.3f}".format(np.float(li_y[i]) ) if ((i % periodicity_y) == 0) else None for i in range(len(li_y))]
+        li_y1 = ["{:.3f}".format(float(li_y[i]) ) if ((i % periodicity_y) == 0) else None for i in range(len(li_y))]
 
     ax = sns.heatmap(data_to_plot, linewidth=0.5, xticklabels=li_x1, yticklabels=li_y1, square=True, annot=False)
 
@@ -828,6 +846,7 @@ def plot_one_heatmap(df_results, plot_path, quantity_to_plot, quant_fixed1, valu
 
     plot_path = plot_path.replace(".pdf", text + "-" + str(plotted_quantity) + ".pdf")
     plt.savefig(plot_path)
+    print(" Heatmap plot was saved to",plot_path)
     # if (quantity_to_plot=="Sharpe_ratio"): plt.show()
     plt.clf()
 
@@ -913,7 +932,7 @@ def read_data(datafile_path, quantity_x, quantity_y):
     else:
         for i in range(len(arr_x)):
             max_y = df0.loc[arr_x[i], quantity_y].max()
-            if (abs(max_y) < 0.0000000000001): max_y = np.float(0)
+            if (abs(max_y) < 0.0000000000001): max_y = float(0)
             arr_y.append(max_y)
     arr_y = np.array(arr_y)
 
@@ -1131,9 +1150,9 @@ def make_plots_convergence( input_params, product_label, distrib_type ):
         dfheader = (list(df0)[0])
         str1 = dfheader.replace("profit_#","")
         str1 = str1.split(sep="__")
-        ev = np.float( str1[0].replace("ev_","") )
-        pt = np.float(str1[1].replace("pt_", ""))
-        sl = np.float(str1[2].replace("sl_", ""))
+        ev = float( str1[0].replace("ev_","") )
+        pt = float(str1[1].replace("pt_", ""))
+        sl = float(str1[2].replace("sl_", ""))
         plot_label = "ev="+"{:.3f}".format(ev) + "; pt="+"{:.3f}".format(pt)
         if (abs(sl) < 100): plot_label += "; sl="+"{:.3f}".format(sl)
 

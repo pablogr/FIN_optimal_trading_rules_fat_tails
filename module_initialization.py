@@ -64,6 +64,14 @@ class InputParams:
         except AttributeError:
             self.list_distribution_types = [ "norm" ]
 
+        try:  self.discount_rate = input.discount_rate
+        except AttributeError: self.discount_rate = None
+        if (self.discount_rate != None): assert self.discount_rate >= 0
+
+        try: self.transaction_costs_rate = input.transaction_costs_rate
+        except AttributeError: self.transaction_costs_rate = None
+        if (self.transaction_costs_rate!=None): assert self.transaction_costs_rate>=0
+
         # Number of times that each set of starting parameters in the fitting of the random variable is tried. Each trial corresponds to a different first iteration of the gradient descent algorithm.
         try: self.n_random_trials = input.n_random_trials
         except AttributeError: self.n_random_trials = 200
@@ -357,16 +365,6 @@ class InputParams:
         if (self.evolution_type == "single_product"):
                 self.method_for_calculation_of_profits = "enter_ensured"
 
-        try:                                               # Logarithm of the discount factor per unit time (e.g. per day if each row of the inputted time series corresponds to one day). If absent or set to None or to zero then discount factor is 1 (i.e. no discount factor is applied). For example, if set to log(1/(1+0.04))/365 being the periodicity one day, it corresponds to a one-year discount rate of 4%.
-            self.log_discount_factor_unit_time = input.log_discount_factor_unit_time
-        except AttributeError:
-            self.log_discount_factor_unit_time = 0
-        if (self.log_discount_factor_unit_time == None): self.log_discount_factor_unit_time=0
-        try:                                              # If set to "homogeneous" then the DF(t+1) = DF(t)*exp( log_discount_factor_unit_time ); if set to "weekly", for t multiple of 5 it is considered the effect of a weekend, i.e. DF(t+1) = DF(t)*exp( 3*log_discount_factor_unit_time )
-            self.discount_factor_update_method = input.discount_factor_update_method
-        except AttributeError:
-            self.discount_factor_update_method = None
-        if (self.discount_factor_update_method == None): self.discount_factor_update_method="homogeneous"
 
         # Set to True if heatmaps for each enter_value are to be plotted
         try: self.plot_heatmaps_for_individual_enter_value = input.plot_heatmaps_for_individual_enter_value
@@ -393,7 +391,6 @@ class InputParams:
         assert self.output_type       in ["heat-map", "optimal_solution"]                # The first option plots different values for a heat map (2D chessboard plot with different colors); the second option indicates that the optimal solution is sought.
         assert self.quantity_to_analyse in ["Sharpe_ratio", "average", "standard_deviation", "semideviation", "Sharpe_ratio_with_semideviation", "VaR", "ES", "probab_loss"]
         assert self.method_optimal_solution in ["Barzilai-Borwein", "bisection"]
-        assert self.discount_factor_update_method in ["homogeneous", "weekly"]
         assert self.method_for_calculation_of_profits in ["enter_ensured", "enter_random_one_deal", "enter_random_many_deals"]
 
         for my_directory in [ self.output_directory, self.output_trad_rules_dir+"/Results", self.output_trad_rules_dir+"/Plots"]:
@@ -435,6 +432,15 @@ class InputParams:
             elif (self.new_value_after_poisson_event != None):
                 print( "They set the \n",textpoisson[self.evolution_type], "to ",self.new_value_after_poisson_event+"." )
 
+        if ((self.transaction_costs_rate==None) or (abs(self.transaction_costs_rate)<0.000000001)):
+            print("\nNo transaction costs will be considered.")
+        else:
+            print("\nThe rate of transaction costs (yearly rate measured in units of currency) will be "+str(100*self.transaction_costs_rate)+" %.")
+            print(" This corresponds to a yearly rate of transaction costs for the spread c="+str(-np.log(1-self.transaction_costs_rate)))
+
+        if ((self.discount_rate==None) or (abs(self.discount_rate)<0.000000001)): print("No discount factors will be considered.")
+        else: print("The (yearly) rate used to calculate discount factors is "+str(100*self.discount_rate)+" %." )
+
         print("\nThe chosen method for the calculation of profits is <<"+self.method_for_calculation_of_profits+">>. This means that")
         if (self.method_for_calculation_of_profits=="enter_ensured"):
             print("in each iteration of the Monte Carlo process the position is built in t=0 (with probability equal to 1), and")
@@ -449,11 +455,21 @@ class InputParams:
             print("we can build new positions, whose return is added. The total profit of each iteration is therefore a cumulative return.\n")
 
         if (self.evolution_type == "Ornstein-Uhlenbeck_equation"):
-            print("The",len(self.list_enter_value),"analysed values to enter the position are between", self.list_enter_value[0],"and", str( (self.list_enter_value[-1]))+"." )
-        print("The",len(self.list_profit_taking),"analysed profit-taking parameters (to add to the enter value) lie between",self.list_profit_taking[0],"and",self.list_profit_taking[-1])
-        print("The",len(self.list_stop_loss),"analysed stop-loss parameters (to add to the enter value) lie between", self.list_stop_loss[0], "and",self.list_stop_loss[-1])
-        print("The",len(self.list_max_horizon),"analysed parameters of maximum horizon till closing the position is between",min(self.list_max_horizon)," and",max(self.list_max_horizon),"\ntime units (a time unit corresponds to the time difference between two rows in the input time series datafile).\n")
+            print("The",len(self.list_enter_value),"analysed values to enter the position are between", "{:.5f}".format(self.list_enter_value[0]),"and", str( "{:.5f}".format((self.list_enter_value[-1])))+"." )
+        if (abs(self.list_profit_taking[0])>0.00001): pt1="{:.5f}".format(self.list_profit_taking[0])
+        else: pt1 = self.list_profit_taking[0]
+        if (abs(self.list_profit_taking[-1])>0.00001): pt2 ="{:.5f}".format(self.list_profit_taking[-1])
+        else: pt2 = self.list_profit_taking[-1]
+        print("The",len(self.list_profit_taking),"analysed profit-taking parameters (to add to the enter value) lie between "+str(pt1)+" and "+str(pt2)+".")
+        if (len(self.list_stop_loss)>1): print("The",len(self.list_stop_loss),"analysed stop-loss parameters (to add to the enter value) lie between", self.list_stop_loss[0], "and",self.list_stop_loss[-1])
+        else: print("The only considered stop-loss parameter will be "+str(self.list_stop_loss[0])+".")
+        if (len(self.list_max_horizon) > 1): print("The",len(self.list_max_horizon),"analysed parameters of maximum horizon till closing the position is between",min(self.list_max_horizon),"and",max(self.list_max_horizon))
+        else: print("The only considered maximum horizon till closing the position will be "+str(self.list_max_horizon[0]))
+        print("time units (a time unit corresponds to the time difference between two rows in the input time series datafile).")
+        print("The number of days that the strategy is expected to be used is "+str(self.strategy_duration )+";\nthis is the maximum time simulated in each iteration of the Monte Carlo algorithm used to find optimal rules.\n")
+
         if (self.output_type=="heat-map"):
+            if not (self.only_plots): print("The goal is to plot heat-maps. They will be elaborated using at least",self.min_num_trials,"calculations for each point.")
             if not (self.only_plots): print("The goal is to plot heat-maps. They will be elaborated using at least",self.min_num_trials,"calculations for each point.")
         else:
             print("The goal is to find the optimal thresholds which optimize the "+self.quantity_to_analyse+". Each pair of thresholds\nwill be evaluated using at least",self.min_num_trials,"calculations for each point.")
@@ -496,9 +512,9 @@ class InputParams:
             except AttributeError:
                 self.oos_dollar_neutral = True
             if (self.oos_dollar_neutral):
-                print(" * In the out-of-sample calculations we will use dollar-neutral portfolios, this is we will buy (or sell) one unit of\n    the product A and sell (or buy) gamma' units of the product B, being gamma' the quotient between both prices as the time of entering.\n")
+                print(" * In the out-of-sample calculations we will use dollar-neutral portfolios, this is we will buy (or sell) one unit of the product A\n    and sell (or buy) gamma' units of the product B, being gamma' the quotient between both prices as the time of entering.\n")
             else:
-                print(" * In the out-of-sample calculations we will NOT use dollar-neutral portfolios; we will buy (or sell) one unit of\n   the product A, and sell (or buy) gamma units of the product B, where gamma is the slope of the regression between log-returns of A vs B.\n   Note that this is not recommended, because the so-generated pairs can be strongly non-dollar-neutral.\n")
+                print(" * In the out-of-sample calculations we will NOT use dollar-neutral portfolios; we will buy (or sell) one unit of the product A\n   and sell (or buy) gamma units of the product B, where gamma is the slope of the regression between log-returns of A vs B.\n   Note that this is not recommended, because the so-generated pairs can be strongly non-dollar-neutral.\n")
 
 
             # The variable below defines how the Spread is defined. If it is "y_vs_x" then the Spread is log(Price_{label_y}) - gamma·log(Price_{label_x}), where gamma is the slope of the Return_{label_y}-vs-Return_{label_x}. If it is "x_vs_y", then the prices and returns are swapped.
@@ -533,15 +549,15 @@ class InputParams:
         print("     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒║")
         print("      ╚════════════════════════════════════════════════════════════════════════════════════╝\n")
 
-        print("\n                                         See references:\n")
+        print("\n                                           See references:\n")
         print("                                  ● M. López de Prado, 'Advances in")
         print("                            financial Machine Learning', Chap. 13 (2018);")
         print("                          ● A. Göncü, E. Akyildirim, 'A stochastic model for   ")
         print("                        commodity pairs trading', Quantitative Finance (2016); ")
-        print("                   /█\    ● Pablo Risueño, 'The effect of fat tails on rules    /█\                                 ")
-        print("                   ███      for optimal pairs trading of stocks and crypto-     ███                                 ")
-        print("                  /███\            currencies based on the Ornstein-           /███\                                ")
-        print("                  |███|               Uhlenbeck equation' (2023).              |███|                                ")
+        print("                   /█\    ● Pablo Risueño et al., 'The effect of fat tails on   /█\                                 ")
+        print("                   ███       rules for optimal pairs trading of stocks and      ███                                 ")
+        print("                  /███\         cryptocurrencies based on the Ornstein-        /███\                                ")
+        print("                  |███|                Uhlenbeck equation' (2023).             |███|                                ")
         print("                  |███|                                                        |███|                                ")
         print("                  █████                                                        █████                                ")
         print("                 |█████|                                                      |█████|                               ")

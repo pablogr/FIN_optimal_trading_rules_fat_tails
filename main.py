@@ -23,7 +23,6 @@ References
 '''
 
 
-
 # ====================================================================================================
 #       BLOCK FOR DOWNLOADING DATA AND FITTING THEM TO PROBABILITY DISTRIBUTIONS
 # ====================================================================================================
@@ -57,6 +56,7 @@ if (input_params.download_data):
 
 
 # Fitting data to probability distribution and making the corresponding plots
+
 
 if (input_params.fit_data):
 
@@ -100,7 +100,7 @@ print("\n **** The calculations finished satisfactorily ****\n")
 '''TRASH / OLD CODE:
 
 
-from module_plots import plot_2D #xxx
+from module_plots import plot_2D 
 import numpy as np
 output_dir = '/Users/pgr/Desktop/Finanzas/Papers_Finanzas_IM/Paper2_Stopping_strategy/tex/_latest_version/Figures/Poisson_pairs/'
 for distrib in ['nct']:

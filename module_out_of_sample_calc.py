@@ -235,7 +235,11 @@ def read_optimal_trading_rules( df_thresholds_one_period, quantity_to_analyse="S
         spr_negative_enter_value = None
         spr_negative_pt = None
 
-    opt_tr = { "opt_enter_positive_spread":spr_positive_enter_value, "opt_pt_positive_spread":spr_positive_pt, "opt_sl_positive_spread":spr_positive_sl, "opt_enter_negative_spread":spr_negative_enter_value,"opt_pt_negative_spread": spr_negative_pt ,"opt_sl_negative_spread": spr_negative_sl }
+    try:
+        opt_tr = { "opt_enter_positive_spread":spr_positive_enter_value, "opt_pt_positive_spread":spr_positive_pt, "opt_sl_positive_spread":spr_positive_sl, "opt_enter_negative_spread":spr_negative_enter_value,"opt_pt_negative_spread": spr_negative_pt ,"opt_sl_negative_spread": spr_negative_sl }
+    except UnboundLocalError:
+        raise Exception("\n\nERROR: Please, make sure that <<list_enter_value>> in input.py contains both positive and negative values (e.g. \n<< list_enter_value = array( list( arange(-0.02500000001, -0.01000000000, 0.001) ) +  list( arange(0.010000000, 0.025000002, 0.001) ) ) >> ).\n")
+
 
     del df_thresholds_one_period; del quantity_to_analyse; del df_positive_en; del df_negative_en
 
@@ -256,7 +260,7 @@ def read_trading_rules( date_, df_tr, spread_enter_sign, verbose=0 ):
             en = df_tr.loc[i, "opt_enter_"+spread_enter_sign+"_spread"]  # "ps" stands for "negative spread"
             pt = df_tr.loc[i, "opt_pt_"+spread_enter_sign+"_spread"]
             sl = df_tr.loc[i, "opt_sl_"+spread_enter_sign+"_spread"]
-            if (verbose>1): print("-On",str(date_.strftime('%Y-%m-%d')),": E0=","{:.6f}".format(E0),";gamma=","{:.6f}".format(gamma),"; The trading rules are: enter=","{:.6f}".format(en),"; profit-taking=","{:.6f}".format(pt),"; stop-loss=","{:.6f}".format(sl))
+            if (verbose>=0.5): print("-On",str(date_.strftime('%Y-%m-%d')),": E0=","{:.6f}".format(E0),";gamma=","{:.6f}".format(gamma),"; The trading rules are: enter=","{:.6f}".format(en),"; profit-taking=","{:.6f}".format(pt),"; stop-loss=","{:.6f}".format(sl))
             break
 
     if (E0==None):
@@ -278,6 +282,8 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
     '''
 
     # Initialization
+    tcrate = input_params.transaction_costs_rate  # Rate for transaction cost (in units of currency)
+    discount_rate = input_params.discount_rate    # Rate for discounting the value of the profits
     if ( spread_type=="y_vs_x" ):
         prod_label_A = prod_label_y
         prod_label_B = prod_label_x
@@ -322,6 +328,7 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
     n_enter = 0
     date_enter = None
     max_horizon =  round(input_params.list_max_horizon[0]*365/252)
+    date0 = df_ts.index[0]
 
     for date_ in df_ts.index:
 
@@ -344,19 +351,25 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
                 avg_enter_cost += price_A_en - gamma_en * price_B_en
                 avg_enter_plong += price_A_en
                 n_enter += 1
-                if (verbose==1): text1 = str(date_.strftime('%Y-%m-%d'))+ ") Spread="+ str("{:.6f}".format(spread))
-                if (verbose>0):  text2 = " ==> Now entering; the price of "+str(prod_label_A)+ " is "+str("{:.2f}".format(price_A_en))+", the price of "+str(prod_label_B)+" is "+str("{:.2f}".format(price_B_en))
+                if (verbose>=1): text1 = str(date_.strftime('%Y-%m-%d'))+ ") Spread="+ str("{:.6f}".format(spread))
+                if (verbose>=0.5):  text2 = " ==> Now entering; the price of "+str(prod_label_A)+ " is "+str("{:.2f}".format(price_A_en))+", the price of "+str(prod_label_B)+" is "+str("{:.2f}".format(price_B_en))
         else: # invested
             if ( (spread > E0 + pt_ns ) or (spread < E0 + sl_ns ) or ( date_ >= date_enter + timedelta(days = max_horizon) ) ):
-                if ( date_ >= date_enter + timedelta(days = max_horizon) ): print("Exitting due to max horizon.")
+                if ( date_ >= date_enter + timedelta(days = max_horizon) ): print("Exiting due to max horizon.")
                 price_A_ex = df_ts.loc[date_, prod_label_A + "_price_Close_corrected"]  # "ex" stands for "exit"
                 price_B_ex = df_ts.loc[date_, prod_label_B + "_price_Close_corrected"]
-                this_profit = ( price_A_ex - price_A_en ) - gamma_en * ( price_B_ex - price_B_en )
+                if (tcrate != None): tc = - tcrate * ( (date_ - date_enter).days / 365 ) * gamma_en * price_B_en # transaction cost (in units of currency). We multiply the rate by (gamma_en * price_B_en) because that is the amount of money which corresponds to the short position (borrowed stock).
+                else: tc = 0
+                if (discount_rate != None):  DF = exp(- discount_rate * ( (date_ - date0).days / 365 ) )
+                else: DF = 1
+                this_profit = ( ( price_A_ex - price_A_en ) - gamma_en * ( price_B_ex - price_B_en ) + tc ) * DF
+                #print("Ndays=",(date_ - date0).days,"MYDATES=", date_, date0,"; DF=",DF,"; antes=",( ( price_A_ex - price_A_en ) - gamma_en * ( price_B_ex - price_B_en ) + tc ),";despues=",this_profit)
                 if ((this_profit>0) or ( date_ >= date_enter + timedelta(days = max_horizon)  ) ):
                     invested = False
                     profit_neg_spread += this_profit
-                    if (verbose==1): text1 = str(date_.strftime('%Y-%m-%d'))+ ") Spread="+ str("{:.6f}".format(spread))
-                    if (verbose > 0): text2 = "Spread exceeded " +str("{:.6f}".format(E0+pt_ns))+" ("+str("{:.4f}".format(E0))+"+("+str("{:.4f}".format(pt_ns))+")) ==> Now exiting; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_ex)) + ", the price of " + str(prod_label_B) + " is " + str("{:.2f}".format(price_B_ex)) + ".\n This profit was: "+str("{:.2f}".format(this_profit)) +" <---\n"
+                    if (verbose >=0.5): print(" Now the tc was ",tc)
+                    if (verbose>=1): text1 = str(date_.strftime('%Y-%m-%d'))+ ") Spread="+ str("{:.6f}".format(spread))
+                    if (verbose >=0.5): text2 = "Spread exceeded " +str("{:.6f}".format(E0+pt_ns))+" ("+str("{:.4f}".format(E0))+"+("+str("{:.4f}".format(pt_ns))+")) ==> Now exiting; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_ex)) + ", the price of " + str(prod_label_B) + " is " + str("{:.2f}".format(price_B_ex)) + ".\n This profit was: "+str("{:.5f}".format(this_profit)) +" <---\n"
         if ((verbose>0) and ((text1!="")or(text2!="")) ): print( text1, text2)
 
     if (invested): # We omit the last enter, which we could not close
@@ -413,18 +426,24 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
                 avg_enter_plong += gamma_en * price_B_en
                 n_enter += 1
                 if (verbose == 1): text1 = str(date_.strftime('%Y-%m-%d')) + ") Spread=" + str("{:.6f}".format(spread))
-                if (verbose > 0):  text2 = " ==> Now entering; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_en)) + ", the price of " + str(prod_label_B) + " is " + str("{:.2f}".format(price_B_en))
+                if (verbose >=0.5):  text2 = " ==> Now entering; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_en)) + ", the price of " + str(prod_label_B) + " is " + str("{:.2f}".format(price_B_en))
         else:  # invested
             if ((spread < E0 + pt_ps) or (spread > E0 + sl_ps) or (date_ >= date_enter + timedelta(days=max_horizon))):
                 if (date_ >= date_enter + timedelta(days=max_horizon)): print("Exitting due to max horizon.")
                 price_A_ex = df_ts.loc[date_, prod_label_A + "_price_Close_corrected"]  # "ex" stands for "exit"
                 price_B_ex = df_ts.loc[date_, prod_label_B + "_price_Close_corrected"]
-                this_profit = -(price_A_ex - price_A_en) + gamma_en * (price_B_ex - price_B_en)
+                if (tcrate != None): tc = - tcrate * ( (date_ - date_enter).days / 365 ) * price_A_en # transaction cost (in units of currency)
+                else: tc = 0
+                if (discount_rate != None):  DF = exp(- discount_rate * ( (date_ - date0).days / 365 ) )
+                else: DF = 1
+                this_profit = ( -(price_A_ex - price_A_en) + gamma_en * (price_B_ex - price_B_en) + tc ) * DF
+                #print("Ndays=", (date_ - date0).days, date_, date0, "; DF=", DF, "; antes=",  ((price_A_ex - price_A_en) - gamma_en * (price_B_ex - price_B_en) + tc), ";despues=", this_profit)
                 if ((this_profit > 0) or (date_ >= date_enter + timedelta(days=max_horizon))):
                     invested = False
+                    if (verbose > 0): print(" Now the tc was ", tc)
                     profit_posit_spread += this_profit
-                    if (verbose == 1): text1 = str(date_.strftime('%Y-%m-%d')) + ") Spread=" + str("{:.6f}".format(spread))
-                    if (verbose > 0):  text2 = "Spread exceeded " + str("{:.6f}".format(E0 + pt_ps)) + " (" + str("{:.4f}".format(E0)) + "+(" + str("{:.6f}".format(pt_ps)) + ")) ==> Now exiting; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_ex)) + ", the price of " + str(prod_label_B) + " is " + str( "{:.2f}".format(price_B_ex)) + ".\n This profit was: " + str("{:.2f}".format(this_profit)) + " <---\n"
+                    if (verbose >= 1): text1 = str(date_.strftime('%Y-%m-%d')) + ") Spread=" + str("{:.6f}".format(spread))
+                    if (verbose >=0.5):  text2 = "Spread exceeded " + str("{:.6f}".format(E0 + pt_ps)) + " (" + str("{:.4f}".format(E0)) + "+(" + str("{:.6f}".format(pt_ps)) + ")) ==> Now exiting; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_ex)) + ", the price of " + str(prod_label_B) + " is " + str( "{:.2f}".format(price_B_ex)) + ".\n This profit was: " + str("{:.5f}".format(this_profit)) + " <---\n"
         if ((verbose > 0) and ((text1 != "") or (text2 != ""))): print(text1, text2)
 
     if (invested):  # We omit the last enter, which we could not close
@@ -467,7 +486,7 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
         df_profits.loc[my_index, "avg_price_long_position"] = avg_plong
         df_profits.loc[my_index, "avg_cost_building_pair"] = avg_ppair
 
-        print(" ** The total profit is:", "{:.6f}".format(total_profit),"\n   The average price of the long position is:", "{:.4f}".format(avg_plong), "(", (N_enter_posit+N_enter_negat), " enters; profit ratio=", "{:.2f}".format(100 * weighted_profit), "%).")
+        print(" ** The total profit is:", "{:.6f}".format(total_profit),"\n   The average price of the long position is:", "{:.4f}".format(avg_plong), "(", (N_enter_posit+N_enter_negat), " enters).")
         if not (input_params.oos_dollar_neutral):
             print("   The average cost of building the pair is:", "{:.4f}".format(avg_ppair), ".\n")
     else:

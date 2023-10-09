@@ -105,8 +105,7 @@ def fit_to_genhyperbolic_global_minimum( dataset_in,  n_random_tries,  max_n_ite
     :return: (4 float numbers) nct_location, nct_scaling, nct_skewparam, nct_df
     '''
 
-    #xxx
-    n_random_tries = 6; max_n_iter = 16
+    # n_random_tries = 6; max_n_iter = 16
 
     li_locations_sg, li_scalings_sg, li_b_sg, li_a_sg, li_p_sg = find_starting_point( dataset_in, consider_skewness, consider_nonzero_p )
     lim_params = LimitsForParams(dataset_in, consider_skewness)
@@ -124,7 +123,7 @@ def fit_to_genhyperbolic_global_minimum( dataset_in,  n_random_tries,  max_n_ite
                           loss_fnd, loc_param_fnd, sca_param_fnd, b_param_fnd, a_param_fnd, p_param_fnd = fit_to_genhyperbolic_local_minimum( dataset_in, max_n_iter, consider_skewness, lim_params, consider_nonzero_p, loc_param_tt, sca_param_tt, b_param_tt, a_param_tt , p_param_tt, verbose )
                           loss_opt, loc_param_opt, sca_param_opt, b_param_opt, a_param_opt, p_param_opt  = update_optimal_parameters( loss_fnd, loc_param_fnd, sca_param_fnd, b_param_fnd, a_param_fnd, p_param_fnd,
                                                                                                                                       loss_opt, loc_param_opt, sca_param_opt, b_param_opt, a_param_opt, p_param_opt  )
-                          if (verbose>0): print("Params IN",  loc_param_tt, sca_param_tt, b_param_tt, a_param_tt , p_param_tt , "; Params OUT", loc_param_fnd, sca_param_fnd, b_param_fnd, a_param_fnd, p_param_fnd, "; LOSS:", loss_fnd )
+                          if (verbose>=1): print("Params IN",  loc_param_tt, sca_param_tt, b_param_tt, a_param_tt , p_param_tt , "; Params OUT", loc_param_fnd, sca_param_fnd, b_param_fnd, a_param_fnd, p_param_fnd, "; LOSS:", loss_fnd )
 
     print(" The GLOBAL minimum (genh) is:", loc_param_opt,  sca_param_opt, b_param_opt,  a_param_opt, p_param_opt,"; Loss:", loss_opt,"\n" )
 
@@ -225,7 +224,7 @@ def fit_to_genhyperbolic_local_minimum( dataset_in, max_n_iter, consider_skewnes
         except RuntimeWarning:
             break #loc_param1 = uniform(-1,1); sca_param1 = uniform(0.2,2); b_param1 = 0 ; a_param1 = uniform(2,4); p_param1 = 0
 
-        if (verbose > 0): print( "iter ",n_iter,") Params",loc_param1, sca_param1,b_param1,a_param1,p_param1,"; loss=",loss1)
+        if (verbose >= 1): print( "iter ",n_iter,") Params",loc_param1, sca_param1,b_param1,a_param1,p_param1,"; loss=",loss1)
         loss_opt, loc_param_opt, sca_param_opt, b_param_opt, a_param_opt, p_param_opt = update_optimal_parameters(loss1,loc_param1,sca_param1,b_param1,a_param1,p_param1,loss_opt,loc_param_opt,sca_param_opt,b_param_opt,a_param_opt,p_param_opt)
 
         #loss_opt, loc_param_opt, sca_param_opt, b_param_opt, a_param_opt, p_param_opt = update_optimal_parameters(loss1,loc_param1,sca_param1,b_param1,a_param1,p_param1,loss_opt,loc_param_opt,sca_param_opt,b_param_opt,a_param_opt,p_param_opt)

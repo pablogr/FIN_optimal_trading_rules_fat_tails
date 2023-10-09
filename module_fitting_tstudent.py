@@ -96,10 +96,10 @@ def fit_to_nct_global_minimum( dataset_in, n_random_tries=100, max_n_iter=150, c
             for skew_param_tt in li_skewparams_sg:
                 for df_param_tt in li_df_sg:
                    for trial_counter in range(n_random_tries):
-                       if (verbose > 0): print("Params IN", loc_param_tt, sca_param_tt, skew_param_tt, df_param_tt )
+                       if (verbose >= 1): print("Params IN", loc_param_tt, sca_param_tt, skew_param_tt, df_param_tt )
                        loss_fnd, loc_param_fnd, sca_param_fnd, skew_param_fnd, df_param_fnd = fit_to_nct_local_minimum( dataset_in, consider_skewness, max_n_iter, lim_params, loc_param_tt, sca_param_tt, skew_param_tt, df_param_tt, verbose )
                        loss_opt, loc_param_opt, sca_param_opt, skew_param_opt, df_param_opt = update_optimal_parameters( loss_fnd, loc_param_fnd, sca_param_fnd, skew_param_fnd, df_param_fnd, loss_opt, loc_param_opt, sca_param_opt, skew_param_opt, df_param_opt  )
-                       if (verbose>0): print("Params IN", loc_param_tt,sca_param_tt, skew_param_tt, df_param_tt, "; Params OUT",loc_param_fnd, sca_param_fnd, skew_param_fnd, df_param_fnd, "; LOSS:", loss_fnd)
+                       if (verbose>=1): print("Params IN", loc_param_tt,sca_param_tt, skew_param_tt, df_param_tt, "; Params OUT",loc_param_fnd, sca_param_fnd, skew_param_fnd, df_param_fnd, "; LOSS:", loss_fnd)
 
     if (consider_skewness): # We repeat the calculations without skewness
         consider_skewness = False
@@ -108,10 +108,10 @@ def fit_to_nct_global_minimum( dataset_in, n_random_tries=100, max_n_iter=150, c
                 for skew_param_tt in [0]:
                     for df_param_tt in li_df_sg:
                         for trial_counter in range( max(round(n_random_tries/2),3) ):
-                            if (verbose >0): print("Without skewness: Params IN", loc_param_tt, sca_param_tt, skew_param_tt, df_param_tt )
+                            if (verbose >=1): print("Without skewness: Params IN", loc_param_tt, sca_param_tt, skew_param_tt, df_param_tt )
                             loss_fnd, loc_param_fnd, sca_param_fnd, skew_param_fnd, df_param_fnd = fit_to_nct_local_minimum(dataset_in, consider_skewness, max_n_iter, lim_params, loc_param_tt, sca_param_tt, skew_param_tt,df_param_tt, verbose)
                             loss_opt, loc_param_opt, sca_param_opt, skew_param_opt, df_param_opt = update_optimal_parameters(loss_fnd, loc_param_fnd, sca_param_fnd, skew_param_fnd, df_param_fnd, loss_opt,loc_param_opt, sca_param_opt, skew_param_opt, df_param_opt)
-                            if (verbose>0): print("Params IN", loc_param_tt,sca_param_tt, skew_param_tt, df_param_tt, "; Params OUT",loc_param_fnd, sca_param_fnd, skew_param_fnd, df_param_fnd, "; LOSS:", loss_fnd)
+                            if (verbose>=1): print("Params IN", loc_param_tt,sca_param_tt, skew_param_tt, df_param_tt, "; Params OUT",loc_param_fnd, sca_param_fnd, skew_param_fnd, df_param_fnd, "; LOSS:", loss_fnd)
 
     print(" The GLOBAL minimum (nct) is:", "{:.9f}".format(loc_param_opt), "{:.9f}".format(sca_param_opt), "{:.9f}".format(skew_param_opt), "{:.9f}".format(df_param_opt) ,"Loss:","{:.9f}".format(loss_opt),"\n")
 

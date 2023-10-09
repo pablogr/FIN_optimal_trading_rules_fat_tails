@@ -9,6 +9,8 @@ from os import path
 from module_generic_functions import find_thresholds
 from module_plots import define_results_name,  reformat_param
 
+# WARNING: Transaction codes and discount rates were not implemented in this module
+
 #-----------------------------------------------------------------------------------------------------------------------
 
 def name_file_seek_enter(input_params,OU_params,rv_params):
