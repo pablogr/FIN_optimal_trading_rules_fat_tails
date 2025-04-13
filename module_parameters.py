@@ -24,10 +24,10 @@ list_columns = ["profit_mean", "profit_std", "Sharpe_ratio", "Sharpe_ratio_with_
 
 dict_price_types = {"Open":"opening",  "Close":"closing", "High":"maximum", "Low":"minimum" }
 
-distribution_types = frozenset( ('norm', 'nct', 'genhyperbolic', 'levy_stable') )
-distribution_types_text = { 'norm':'normal', 'nct':'non-centered t-student', 'genhyperbolic':'generalized hyperbolic','levy_stable':'levy stable' }
-distribution_types_text2 = { 'norm':'normal', 'nct':'nct', 'genhyperbolic':'ghyp','levy_stable':'stable' }
-distribution_types_text3 = { 'norm':'Normal', 'nct':'t-student', 'genhyperbolic':'Gen. hyperbolic','levy_stable':'Stable' }
+distribution_types = frozenset( ('norm', 'nct', 'johnsonsu', 'genhyperbolic', 'levy_stable') )
+distribution_types_text = { 'norm':'normal', 'nct':'non-centered t-student',  'johnsonsu':'Johnson-SU', 'genhyperbolic':'generalized hyperbolic','levy_stable':'levy stable' }
+distribution_types_text2 = { 'norm':'normal', 'nct':'nct','johnsonsu':'johnsonsu', 'genhyperbolic':'ghyp','levy_stable':'stable' }
+distribution_types_text3 = { 'norm':'Normal', 'nct':'t-student', 'johnsonsu':'Johnson-SU', 'genhyperbolic':'Gen. hyperbolic','levy_stable':'Stable' }
 
 
 tolerance_fitting = 10**(-7)

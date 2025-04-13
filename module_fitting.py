@@ -3,10 +3,11 @@ import pandas as pd
 from os import path
 from sklearn import linear_model
 from statsmodels.tsa.stattools import adfuller
-from scipy.stats import norm, cauchy, nct, genhyperbolic, levy_stable
+from scipy.stats import norm, cauchy, nct, johnsonsu, genhyperbolic, levy_stable
 from math import isnan
 import module_parameters
-
+pd.set_option('display.max_columns', 10)
+#pd.set_option('display.max_rows', 5000)
 
 
 #===============================================================================================================================
@@ -20,7 +21,7 @@ import module_parameters
 
 class Spread:
 
-    def __init__(self, input_directory, calculation_mode, list_product_labels_name, label_x, label_y, first_date=None, last_date=None, price_label="log_price_Close_corrected" ):
+    def __init__(self, input_directory, calculation_mode, list_product_labels_name, label_x, label_y, list_risk_factors, first_date=None, last_date=None, price_label="log_price_Close_corrected" ):
         '''This reads the time-series of price and its log-returns of the two input labels and stores them in a dataframe.
         The class Spread contains the functions that follow:
         - OLS_regression
@@ -46,8 +47,18 @@ class Spread:
         label_ycorr = label_y + "_" + col_corr
         label_yta = label_y + "_" + price_label
         df_y = df_y.rename(columns = {price_label:label_yta, col_corr:label_ycorr})
+        df_aux_ts = pd.concat([df_x, df_y], axis=1).dropna()
 
-        self.time_series = pd.concat([df_x,df_y],axis=1).dropna()
+        for label_rf in list_risk_factors:
+            df_rf = pd.read_csv(input_directory + "/Time_series/ret_" + str(label_rf) + ".csv",usecols=["Date", price_label, col_corr])
+            df_rf = df_rf.set_index("Date")
+            if ((first_date != None) and (last_date != None)): df_rf = df_rf.loc[first_date:last_date]
+            label_corr = label_rf + "_" + col_corr
+            label_ta   = label_rf + "_" + price_label
+            df_rf = df_rf.rename(columns={price_label: label_ta, col_corr: label_corr})
+            df_aux_ts = pd.concat([df_aux_ts, df_rf], axis=1).dropna()
+
+        self.time_series = df_aux_ts.copy()
         self.label_x = label_x
         self.label_y = label_y
         self.label_xta = label_xta
@@ -78,15 +89,18 @@ class Spread:
 
     def OLS_regression(self, label_xregr, label_yregr, store_residuals=False):
         '''This calculates the parameters of an ordinary least-squares linear regression between the time-series of both labels.'''
+
+        print(' * Now doing the linear regression with x=',label_xregr,', y=',label_yregr)
+
         df_y = pd.DataFrame(self.time_series[label_yregr])
 
-        if ((label_xregr=="Spread_y_vs_x(t-1)")or(label_xregr=="Spread_x_vs_y(t-1)")):
+        if ((label_xregr=="Spread_y_vs_x(t-1)")or(label_xregr=="Spread_x_vs_y(t-1)")): # This is used in the fitting to discrete Ornstein-Uhlenbeck equation
             df_x = pd.DataFrame( self.time_series[label_yregr] )
             df_x=df_x.shift(1)
             df_x = df_x.iloc[1:, :]
             df_y = df_y.iloc[1:, :]
         else:
-            df_x = pd.DataFrame( self.time_series[label_xregr]  )
+            df_x = pd.DataFrame( self.time_series[label_xregr]  ) # This is used in generic linear regression, like the one to be used to calculate gamma (which defines the Spread).
 
         resu = linear_model.LinearRegression().fit(df_x, df_y)
         resu_slope = resu.coef_[0][0];        # Slope
@@ -108,16 +122,94 @@ class Spread:
         return { 'label':label_yregr+'-vs-'+label_xregr, 'slope':resu_slope, 'intercept':resu_intercept, 'R-squared':rsquared }
 
 
-    def calc_spread(self):
+    def calc_spread(self, input_params ):
         '''This calculates the spreads, defined as log(p_A) - gamma · log(p_B), where gamma is the slope of the
-        regression of log(p_A(t)/p_A(t-1))-vs-log(p_B(t)/p_B(t-1)). This is calculated for (A=label_x, B=label_y) and vice versa.'''
+        regression of THE COMMON TRENDS OF
+        log(p_A(t)/p_A(t-1))-vs-log(p_B(t)/p_B(t-1)). This is calculated for (A=label_x, B=label_y) and vice versa.'''
+
+        list_risk_factors = input_params.list_risk_factor_labels
 
         label_xregr = self.label_x + "_" + self.name_col_correlation
         label_yregr = self.label_y + "_" + self.name_col_correlation
+        list_labels_risk_factors = [ a+"_" + self.name_col_correlation for a in list_risk_factors ]
+
+        df_x0 = pd.DataFrame( self.time_series[ list_labels_risk_factors ]  )
+        df_x0.index = pd.to_datetime(df_x0.index)
+        df_x0 = pd.concat([df_x0, input_params.risk_free_rate], axis=1).dropna()
+        for risk_factor_label in list_labels_risk_factors:
+            df_x0[risk_factor_label] = df_x0[risk_factor_label] - df_x0["risk_free_rate"]
+        df_x0 = df_x0.drop(["risk_free_rate"], axis=1)
+
+        df_y0 = pd.DataFrame( self.time_series[ label_xregr ]) # This notation is right: The x for the regression (x_regr) is the independent variable (y) here. The dependent variables are the risk factors.
+        df_y0.index = pd.to_datetime(df_y0.index)
+        df_y0 = pd.concat([df_y0,input_params.risk_free_rate],axis=1).dropna()
+        df_y0[label_xregr] = df_y0[label_xregr] - df_y0["risk_free_rate"]
+        df_y0 = df_y0.drop(["risk_free_rate"], axis=1)
+
+        resu0 = linear_model.LinearRegression().fit(df_x0, df_y0) # This is the regression of the returns of the stock price (y) wrt one or more regressors (the risk factors, e.g. the returns of the SP500).
+        list_slopes_risk_factors_x = []
+        for i in range(len(list_labels_risk_factors)):
+            list_slopes_risk_factors_x.append(resu0.coef_[0][i])
+        #rsquared = resu.score(df_x0, df_y0)  ; print("xResultados de la regresion: \nslope=",list_slopes_risk_factors_x,'\nrsquared=',rsquared)
+        df_x0["common_trend_x"] = 0.0
+        for i in range(len(list_labels_risk_factors)):
+            df_x0["common_trend_x"] += df_x0[ list(df_x0)[i] ] * resu0.coef_[0][i]
+        if (len(list_labels_risk_factors)==1): print("Beta1=",resu0.coef_[0][0])
+
+        #old: df_x1 = pd.DataFrame( self.time_series[ list_labels_risk_factors ]  )
+        #old: df_y1 = pd.DataFrame(self.time_series[label_yregr ])
+
+        df_x1 = pd.DataFrame(self.time_series[list_labels_risk_factors])
+        df_x1.index = pd.to_datetime(df_x1.index)
+        df_x1 = pd.concat([df_x1, input_params.risk_free_rate], axis=1).dropna()
+        for risk_factor_label in list_labels_risk_factors:
+            df_x1[risk_factor_label] = df_x1[risk_factor_label] - df_x1["risk_free_rate"]
+        df_x1 = df_x1.drop(["risk_free_rate"], axis=1)
+
+        df_y1 = pd.DataFrame(self.time_series[ label_yregr])  # This notation is right: The x for the regression (x_regr) is the independent variable (y) here. The dependent variables are the risk factors.
+        df_y1.index = pd.to_datetime(df_y1.index)
+        df_y1 = pd.concat([df_y1, input_params.risk_free_rate], axis=1).dropna()
+        df_y1[label_yregr] = df_y1[label_yregr] - df_y1["risk_free_rate"]
+        df_y1 = df_y1.drop(["risk_free_rate"], axis=1)
+
+        resu1 = linear_model.LinearRegression().fit(df_x1, df_y1)
+        list_slopes_risk_factors_y = []
+        for i in range(len(list_labels_risk_factors)):
+            list_slopes_risk_factors_y.append(resu1.coef_[0][i])
+        df_x1["common_trend_y"] = 0.0
+        for i in range(len(list_labels_risk_factors)):
+            df_x1["common_trend_y"] += df_x1[ list(df_x0)[i] ] * resu1.coef_[0][i]
+        if (len(list_labels_risk_factors)==1): print("Beta2=", resu1.coef_[0][0])
+
+        x_label_short = label_xregr.replace("_price_Close_corrected_log_ret", "")
+        y_label_short = label_yregr.replace("_price_Close_corrected_log_ret", "")
+
+        df_ct = pd.concat( [df_x0["common_trend_x"], df_x1["common_trend_y"]], axis=1).dropna()
+        df_ct.to_csv(self.input_dir+"/Time_series/Spreads/gammas/common_trends__x_"+x_label_short+"-y_"+y_label_short+".csv",index=True)
+
+        slope_y_vs_x = linear_model.LinearRegression().fit( pd.DataFrame(df_ct["common_trend_x"]) ,pd.DataFrame(df_ct["common_trend_y"]) ).coef_[0][0]
+        slope_x_vs_y = linear_model.LinearRegression().fit(pd.DataFrame(df_ct["common_trend_y"]),pd.DataFrame(df_ct["common_trend_x"])).coef_[0][0]
+
+        print("The slopes of ",x_label_short, y_label_short," are: y-vs-x:",slope_y_vs_x,"; x-vs-y=",slope_x_vs_y)
+        df_slopes = pd.DataFrame(index=[0,1],columns=["x_label","y_label","slope_type","slope_value"])
+        df_slopes["x_label"] = x_label_short
+        df_slopes["y_label"] = y_label_short
+        df_slopes["slope_type"] = ["slope_y_vs_x","slope_x_vs_y"]
+        df_slopes["slope_value"] = [slope_y_vs_x,slope_x_vs_y]
+        df_slopes.to_csv(self.input_dir+"/Time_series/Spreads/gammas/gammas_"+x_label_short+"-"+y_label_short+".csv",index=False)
+        del x_label_short; del y_label_short; del df_slopes
+
         self.regr_ret_y_vs_x = self.OLS_regression(label_xregr, label_yregr)
         self.regr_ret_x_vs_y = self.OLS_regression(label_yregr, label_xregr)
-        self.time_series["Spread_y_vs_x"] = self.time_series[self.label_yta] - ( self.time_series[self.label_xta] * self.regr_ret_y_vs_x['slope'] )
-        self.time_series["Spread_x_vs_y"] = self.time_series[self.label_xta] - ( self.time_series[self.label_yta] * self.regr_ret_x_vs_y['slope'] )
+
+        # OLD METHOD FOR CALCULATION OF gamma
+        #old: self.time_series["Spread_y_vs_x"] = self.time_series[self.label_yta] - ( self.time_series[self.label_xta] * self.regr_ret_y_vs_x['slope'] )
+        #old: self.time_series["Spread_x_vs_y"] = self.time_series[self.label_xta] - ( self.time_series[self.label_yta] * self.regr_ret_x_vs_y['slope'] )
+
+        # NEW METHOD FOR CALCULATION OF gamma
+        self.time_series["Spread_y_vs_x"] = self.time_series[self.label_yta] - (self.time_series[self.label_xta] * slope_y_vs_x )
+        self.time_series["Spread_x_vs_y"] = self.time_series[self.label_xta] - (self.time_series[self.label_yta] * slope_x_vs_y )
+
         filepathout = self.input_dir + "/Time_series/Spreads/Spreads_"+self.list_product_labels_name+"/Data/spr_" + str(self.label_x) + "_" + str(self.label_y) + ".csv"
         if (self.calculation_mode=="out_of_sample"):
             suffix = "-oos"
@@ -128,7 +220,6 @@ class Spread:
             self.stationarity_Spread_y_vs_x = self.calc_stationarity("Spread_y_vs_x")
             self.stationarity_Spread_x_vs_y = self.calc_stationarity("Spread_x_vs_y")
 
-
     def calc_stationarity(self, col_name="Spread_y_vs_x", pvalue_thershold=0.05):
         '''This function calculates the stationarity properties using the Augmented Dickey-Fuller test.'''
         my_spread = self.time_series[col_name].to_numpy()
@@ -136,13 +227,15 @@ class Spread:
         stationary = lambda x: x <= pvalue_thershold
         dict_prod = { "Spread_y_vs_x": self.label_y+"-vs-"+self.label_x, "Spread_x_vs_y": self.label_x+"-vs-"+self.label_y }
         #print("Test statistics=", adfresult[0], "p-value=", adfresult[1])
-        return {'products':dict_prod[col_name],'quantity': col_name, 'test_statistics':adfresult[0], 'pvalue':adfresult[1], 'probably_stationary': stationary(adfresult[1]) }
+        return {'products':dict_prod[col_name],'quantity': col_name, 'test_statistics':adfresult[0], 'pvalue':adfresult[1], 'probably_stationary': stationary(adfresult[1]) } # DEV: Set the last parameter to True if you want to plot the spread, even if it is not stationary. Poner 'probably_stationary': stationary(adfresult[1]) }
 
 
     def calc_Ornstein_Uhlenbeck_parameters(self,demand_stationarity=True):
         '''This functions fits the time-lagged spreads S(t)-vs-S(t-1), and performs an ols linear regression to extract
         the slope and intercept, which provide the parameters of the Ornstein-Uhlenbeck equation. It also calculates the
         parameters of the residuals.'''
+
+        print("Now calculating the Ornstein-Uhlenbeck parameters.")
 
         filepath0 = self.input_dir + "/Time_series/Spreads/Spreads_" + self.list_product_labels_name + "/Data/spr_resid_" + self.label_x + "_" + self.label_y + "_"
 
@@ -242,11 +335,13 @@ class Spread:
 def find_pais_hi_correlation( input_params ):
     '''This function finds the pairs which are suitable for building spreads (filtering by correlation).'''
 
+    list_risk_factors = input_params.list_risk_factor_labels
+
     mylen = len(input_params.list_product_labels)
     df_corr = pd.DataFrame()
     for i in range(mylen):
         for j in range(i + 1, mylen):
-            my_spread = Spread(input_params.input_directory, input_params.calculation_mode, input_params.list_product_labels_name, input_params.list_product_labels[i], input_params.list_product_labels[j]  )
+            my_spread = Spread(input_params.input_directory, input_params.calculation_mode, input_params.list_product_labels_name, input_params.list_product_labels[i], input_params.list_product_labels[j], list_risk_factors  )
             corr_row = my_spread.calc_correlation()
             df_corr = pd.concat( [df_corr,corr_row],axis=0)
     df_corr.columns=["product_1","product_2","correlation"]
@@ -292,8 +387,10 @@ def calc_all_spreads( input_params ):
 
     for prod_label1, prod_label2 in zip(df0["product_1"], df0["product_2"]):
 
-        my_spread = Spread(input_params.input_directory, input_params.calculation_mode, input_params.list_product_labels_name, prod_label1, prod_label2 )
-        my_spread.calc_spread(  )
+        print(" Now building spread of ",input_params.input_directory,input_params.list_product_labels_name, prod_label1, prod_label2)
+
+        my_spread = Spread(input_params.input_directory, input_params.calculation_mode, input_params.list_product_labels_name, prod_label1, prod_label2, input_params.list_risk_factor_labels )
+        my_spread.calc_spread( input_params )
         df_stationarity = update_stationarity_df(df_stationarity, my_spread)
         my_spread.calc_Ornstein_Uhlenbeck_parameters()
         my_spread.save_Ornstein_Uhlenbeck_parameters(input_params.ts_directory+"/Spreads/Spreads_"+input_params.list_product_labels_name + "/Data/Fitting_parameters/")
@@ -356,14 +453,14 @@ def read_params_nct( directory, product_label ):
 
     nct_result_file_path = glob(directory+'/spr_fitting_params*nct*')
     if (nct_result_file_path==[]):
-        nct_results = {'nct_loc':np.float('NaN')}
+        nct_results = {'nct_loc':float('NaN')}
     else:
         df0 = pd.read_csv(nct_result_file_path[0],header=0)
         df0 = df0.set_index("spread_name")
         try:
             nct_results = df0.loc[product_label]
         except KeyError:
-            nct_results = {'nct_loc': np.float('NaN')}
+            nct_results = {'nct_loc': float('NaN')}
 
     del directory; del product_label; del nct_result_file_path; del df0
 
@@ -444,6 +541,8 @@ class FittedTimeSeries:
             self.fitting_parameters = { 'distribution_type':'norm', 'mu':self.fitting_parameters['loc_param'],'sigma':self.fitting_parameters['scale_param'], 'loss':self.fitting_parameters['loss']  }
         elif (fitting_function == "nct"):
             self.fitting_parameters = { 'distribution_type':'nct', 'mu':self.fitting_parameters['loc_param'],'sigma':self.fitting_parameters['scale_param'], 'third_param':self.fitting_parameters['skewness_param'], 'fourth_param':self.fitting_parameters['df_param'], 'loss':self.fitting_parameters['loss']  }
+        elif (fitting_function == "johnsonsu"):
+            self.fitting_parameters = {'distribution_type': 'johnsonsu', 'mu': self.fitting_parameters['loc_param'],  'sigma': self.fitting_parameters['scale_param'],'third_param': self.fitting_parameters['a_param'],'fourth_param': self.fitting_parameters['b_param'],'loss': self.fitting_parameters['loss']}
         elif (fitting_function == "genhyperbolic"):
             self.fitting_parameters = { 'distribution_type':'genhyperbolic', 'mu':self.fitting_parameters['loc_param'],'sigma':self.fitting_parameters['scale_param'], 'third_param':self.fitting_parameters['b_param'], 'fourth_param':self.fitting_parameters['a_param'] , 'fifth_param':self.fitting_parameters['p_param'], 'loss':self.fitting_parameters['loss']  }
         elif (fitting_function == "levy_stable"):
@@ -453,11 +552,12 @@ class FittedTimeSeries:
     def check_normality(self, residuals ):
         '''This function performs normality tests of the input variable (a numpy array).'''
 
-        from scipy.stats import anderson, shapiro, kstest
+        from scipy.stats import anderson, shapiro, kstest, skew, kurtosis
         from math import exp
 
         shapiro_test = shapiro(residuals)
         pval = shapiro_test.pvalue
+        shap_stat = shapiro_test.statistic
         if (pval < 0.05 ): text = "Normality is rejected."
         else:              text = "Failed to reject normality."
         print("\n NORMALITY TESTS:\n Shapiro-Wilk p-value       =", pval,"; "+text)
@@ -483,13 +583,17 @@ class FittedTimeSeries:
 
         # -----
 
-        p_val = kstest(residuals, 'norm').pvalue
-        if (p_val < 0.05 ): text = "Normality is rejected."
+        p_valks = kstest(residuals, 'norm').pvalue
+        stat_ks = kstest(residuals, 'norm').statistic
+
+        if (p_valks < 0.05 ): text = "Normality is rejected."
         else:               text = "Failed to reject normality."
-        print(" Kolmogorov-Smirnov p-value =", p_val,"; "+text,"\n")
+        print(" Kolmogorov-Smirnov p-value =", p_valks,"; "+text,"\n")
         # "Since the p-value is less than .05, we reject the null hypothesis. We have sufficient evidence to say that the sample data does not come from a normal distribution".
 
-        del residuals; del p; del AD; del pval; del p_val; del text
+        #print("\n ;",len(residuals),";",np.mean(residuals),";",np.std(residuals),";",skew(residuals),";",kurtosis(residuals),";",shap_stat,";",pval,";",AD,";",p,";", stat_ks,";",p_valks)
+
+        del residuals; del shap_stat; del pval; del p; del AD; del  stat_ks; del p_valks; del text
 
         return
 
@@ -503,6 +607,8 @@ class FittedTimeSeries:
         # This fits the data of returns to a given probability distribution.
         if (fitting_function == "nct"):
             print("* Now fitting the data of " + self.filename + " to a non-centered t-student distribution.")
+        elif (fitting_function == "johnsonsu"):
+            print("* Now fitting the data of " + self.filename + " to a Johnson SU distribution.")
         elif (fitting_function == "genhyperbolic"):
             if (self.consider_p):
                 print("* Now fitting the data of " + self.filename + " to a generalized hyperbolic distribution (with p parameter).")
@@ -520,6 +626,9 @@ class FittedTimeSeries:
         elif (fitting_function == "nct"):
             from module_fitting_tstudent import fit_to_nct_global_minimum
             self.fitting_parameters = fit_to_nct_global_minimum(self.ts_to_fit, self.n_random_trials, self.max_n_iter, self.consider_skewness, self.verbose )
+        elif (fitting_function == "johnsonsu"):
+            from module_fitting_johnsonsu import fit_to_johnsonsu_global_minimum
+            self.fitting_parameters = fit_to_johnsonsu_global_minimum(self.ts_to_fit, self.n_random_trials, self.max_n_iter, self.consider_skewness, self.verbose)
         elif (fitting_function == "genhyperbolic"):
             from module_fitting_genhyperbolic import fit_to_genhyperbolic_global_minimum
             self.fitting_parameters = fit_to_genhyperbolic_global_minimum(self.ts_to_fit,  self.n_random_trials, self.max_n_iter, self.consider_skewness, self.consider_p, self.verbose)
@@ -527,7 +636,7 @@ class FittedTimeSeries:
             from module_fitting_stable import fit_to_stable_global_minimum
             if (self.efficient_fit_to_levy_stable):
                 n_random_trials = 1;
-                max_n_iter = 12
+                max_n_iter = 16
             else:
                 n_random_trials = self.n_random_trials
                 max_n_iter      = self.max_n_iter
@@ -718,14 +827,15 @@ def create_df_fitting_parameters( input_params, df_stationary ):
 
     if ('norm' in input_params.list_distribution_types):          list_cols += ["normal_loc","normal_scale","normal_loss"]
     if ('nct'  in input_params.list_distribution_types):          list_cols += ["nct_loc", "nct_scale", "nct_skparam", "nct_dfparam", "nct_loss"]
+    if ('johnsonsu' in input_params.list_distribution_types):     list_cols += ["johnsonsu_loc", "johnsonsu_scale", "johnsonsu_a_param", "johnsonsu_b_param", "johnsonsu_loss"]
     if ('levy_stable' in input_params.list_distribution_types):   list_cols += ["stable_loc", "stable_scale", "stable_beta_param", "stable_alpha_param", "stable_loss"]
     if ('genhyperbolic' in input_params.list_distribution_types): list_cols += ["ghyp_loc", "ghyp_scale", "ghyp_b_param","ghyp_a_param","ghyp_p_param", "ghyp_loss"]
 
-    if (len(df_stationary)==0): raise Exception("\n ERROR: No stationary time series were found.\n")
 
+    if (len(df_stationary)==0) : raise Exception("\n ERROR: No stationary time series were found.\n")
     df_fitting_params_index = []
-    for i in df_stationary.index:
-        filename_resid, trash1, trash2 = define_names(input_params, df_stationary.loc[i,"products"], df_stationary.loc[i,"quantity"])
+    for i in df_stationary.index.values.tolist():
+        filename_resid, trash1, trash2 = define_names(input_params, df_stationary.loc[i, "products"],  df_stationary.loc[i, "quantity"])
         df_fitting_params_index.append(filename_resid)
 
     df_fitting_params = pd.DataFrame( index=df_fitting_params_index, columns=list_cols )
@@ -737,7 +847,7 @@ def create_df_fitting_parameters( input_params, df_stationary ):
     filepath = dir_fitting_data + "spr_fitting_params_" + input_params.list_product_labels_name + suffix + ".csv"
     df_fitting_params.to_csv(filepath,index=True)
 
-    del input_params; del df_stationary; del df_fitting_params; del df_fitting_params_index; del suffix;  del trash1; trash2; del list_cols
+    del input_params; del df_stationary; del df_fitting_params; del df_fitting_params_index; del suffix;  del list_cols
 
     return filepath, dir_fitting_data
 
@@ -755,7 +865,7 @@ def update_df_fitting_parameters( file_fit_path, filename_resid, filepath_OrnUhl
         df_fitting_params.loc[df_out_index, "OU_phi"] = str(df1.loc[i, "phi"])
         df_fitting_params.loc[df_out_index, "OU_Rsquared"] = str(df1.loc[i, "Rsquared"])
 
-    dict_df_fitting   = { 'norm':'normal', 'nct':'nct', 'genhyperbolic':'ghyp', 'levy_stable':'stable' }
+    dict_df_fitting   = { 'norm':'normal', 'nct':'nct', 'genhyperbolic':'ghyp', 'levy_stable':'stable', 'johnsonsu':'johnsonsu'}
     distrib_type_dict = dict_fitting_parameters['distribution_type'] # e.g. nct, norm
     distrib_type_df   = dict_df_fitting[ distrib_type_dict ]         # e.g. nct, normal
 
@@ -763,9 +873,12 @@ def update_df_fitting_parameters( file_fit_path, filename_resid, filepath_OrnUhl
     df_fitting_params.loc[filename_resid,distrib_type_df +"_loc"]    = dict_fitting_parameters['loc_param']
     df_fitting_params.loc[filename_resid, distrib_type_df+"_scale"]  = dict_fitting_parameters['scale_param']
 
-    if (distrib_type_dict=="nct"):
+    if (distrib_type_dict == "nct"):
         df_fitting_params.loc[filename_resid, distrib_type_df + "_skparam"] = dict_fitting_parameters['skewness_param']
         df_fitting_params.loc[filename_resid, distrib_type_df + "_dfparam"] = dict_fitting_parameters['df_param']
+    elif (distrib_type_dict=="johnsonsu"):
+        df_fitting_params.loc[filename_resid, distrib_type_df + "_a_param"] = dict_fitting_parameters['a_param']
+        df_fitting_params.loc[filename_resid, distrib_type_df + "_b_param"] = dict_fitting_parameters['b_param']
     elif (distrib_type_dict=="levy_stable"):
         df_fitting_params.loc[filename_resid, distrib_type_df + "_alpha_param"] = dict_fitting_parameters['alpha_param']
         df_fitting_params.loc[filename_resid, distrib_type_df + "_beta_param"] = dict_fitting_parameters['beta_param']
@@ -776,7 +889,7 @@ def update_df_fitting_parameters( file_fit_path, filename_resid, filepath_OrnUhl
 
     df_fitting_params.to_csv(file_fit_path,index=True)
 
-    del filename_resid; del dict_fitting_parameters; dict_df_fitting; del distrib_type_dict; del distrib_type_df; del df_out_index; del filepath_OrnUhl_params; del df_fitting_params
+    del filename_resid; del dict_fitting_parameters; del distrib_type_dict; del distrib_type_df; del df_out_index; del filepath_OrnUhl_params; del df_fitting_params
 
     return
 
@@ -841,6 +954,7 @@ def fit_residuals(input_params):
         plot_histograms_without_fitting(input_params)
         plot_histograms_without_fitting_all_curves(input_params)
 
+
     #df_fitting_params.to_csv(filepath,index=True)
     # DEV: To do just plotting (without fitting) comment 4 last lines, except <<my_dataset.plot_fitting()>>
     del input_params; del df_stationary;
@@ -857,6 +971,11 @@ def first_iteration(dataset_in, distrib_type, consider_skewness, loc_param0, sca
     if (distrib_type == "nct"):
         from module_fitting_tstudent import calculate_gradient_params
         loss0 = - (np.sum(np.log(nct.pdf(dataset_in, loc=loc_param0, scale=sca_param0, nc=skewness_param0, df=tail_param0)))) / len(dataset_in)
+        grad_loc0, grad_sca0, grad_sk0, grad_tail0 = calculate_gradient_params(dataset_in, consider_skewness,loc_param0, sca_param0,skewness_param0, tail_param0)
+        factor_accept = 0.95; cauchy_scale = 0.001
+    elif (distrib_type == "johnsonsu"):
+        from module_fitting_johnsonsu import calculate_gradient_params
+        loss0 = - (np.sum(np.log(johnsonsu.pdf(dataset_in, loc=loc_param0, scale=sca_param0, a=skewness_param0, b=tail_param0)))) / len(dataset_in)
         grad_loc0, grad_sca0, grad_sk0, grad_tail0 = calculate_gradient_params(dataset_in, consider_skewness,loc_param0, sca_param0,skewness_param0, tail_param0)
         factor_accept = 0.95; cauchy_scale = 0.001
     elif (distrib_type == "genhyperbolic"):
@@ -906,7 +1025,7 @@ def first_iteration(dataset_in, distrib_type, consider_skewness, loc_param0, sca
     if ( (distrib_type == "levy_stable") or ( (distrib_type == "genhyperbolic") and (isnan(loss1)) )):
 
         loss_opt = 999; step_opt = 9999
-        for step in [ -10**(-8), 10**(-8),-3*10**(-8), 3*10**(-8), -10**(-7), 10**(-7), -3*10**(-7), 3*10**(-7), -10**(-6), 10**(-6), -10**(-5), 10**(-5) ]:
+        for step in [ -10**(-8), 10**(-8),-3*10**(-8), 3*10**(-8), -10**(-7), 10**(-7), -3*10**(-7), 3*10**(-7),  -10**(-6), 10**(-6),  -3*10**(-6), 3*10**(-6), -10**(-5), 10**(-5),-3*10**(-5), 3*10**(-5),-10**(-4), 10**(-4),  -3*10**(-4), 3*10**(-4),  -10**(-3), 10**(-3),-3*10**(-3), 3*10**(-3), -10**(-2),  10**(-2),  -3*10**(-2),  3*10**(-2) ,   -10**(-1),  10**(-1),  -3*10**(-1),  3*10**(-1) ]:
             loc_param1 = loc_param0 + step * grad_loc0
             sca_param1 = sca_param0 + step * grad_sca0
             skewness_param1 = skewness_param0 + step * grad_sk0
@@ -925,7 +1044,7 @@ def first_iteration(dataset_in, distrib_type, consider_skewness, loc_param0, sca
 
     if ((((distrib_type != "levy_stable") or (loss_opt >= factor_accept * loss0)  )) ):
 
-        if (distrib_type != "genhyperbolic"): loss1=float('NaN') #np.float('NaN')
+        if (distrib_type != "genhyperbolic"): loss1=float('NaN')
         count = 0; max_count = 50
         while (count <= max_count) :
             if not (isnan(loss1)):
@@ -948,6 +1067,8 @@ def first_iteration(dataset_in, distrib_type, consider_skewness, loc_param0, sca
 
             if (distrib_type == "nct"):
                 loss1 = - (np.sum(np.log(nct.pdf(dataset_in, loc=loc_param1, scale=sca_param1, nc=skewness_param1, df=tail_param1)))) / len(dataset_in)
+            elif (distrib_type == "johnsonsu"):
+                loss1 = - (np.sum(np.log(johnsonsu.pdf(dataset_in, loc=loc_param1, scale=sca_param1, a=skewness_param1, b=tail_param1)))) / len(dataset_in)
             elif (distrib_type == "genhyperbolic"):
                 loss1 = - (np.sum(np.log(genhyperbolic.pdf(dataset_in, loc=loc_param1, scale=sca_param1, b=skewness_param1, a=tail_param1,p=form_param1)))) / len(dataset_in)
             elif (distrib_type == "levy_stable"):
@@ -969,7 +1090,7 @@ def first_iteration(dataset_in, distrib_type, consider_skewness, loc_param0, sca
         aux = form_param1; form_param1 = form_param0; form_param0 = aux
         aux = loss1; loss1=loss0; loss0 = aux
         # Swapping points means that we have to recalculate the gradient at the point 0:
-        if ((distrib_type == "nct") or (distrib_type == "levy_stable")):
+        if ((distrib_type == "nct") or (distrib_type == "levy_stable") or (distrib_type == "johnsonsu") ):
             grad_loc0, grad_sca0, grad_sk0, grad_tail0 = calculate_gradient_params(dataset_in, consider_skewness,loc_param0, sca_param0,skewness_param0,tail_param0)
         elif (distrib_type == "genhyperbolic"):
             grad_loc0, grad_sca0, grad_sk0, grad_tail0, grad_form0 = calculate_gradient_params(dataset_in, consider_skewness, consider_nonzero_p, loc_param0, sca_param0,skewness_param0,tail_param0, form_param0)
@@ -989,6 +1110,10 @@ def first_iteration_single_param( sp, dataset_in, distrib_type, consider_skewnes
         from module_fitting_tstudent import calculate_gradient_params, calculate_gradient_single_param
         loss0 = - (np.sum(np.log(nct.pdf(dataset_in, loc=loc_param0, scale=sca_param0, nc=skewness_param0, df=tail_param0)))) / len(dataset_in)
         my_grad = calculate_gradient_single_param(sp, dataset_in, consider_skewness, lim_params, loc_param0, sca_param0,skewness_param0, tail_param0)
+    elif (distrib_type == "johnsonsu"):
+        from module_fitting_johnsonsu import calculate_gradient_params, calculate_gradient_single_param
+        loss0 = - (np.sum(  np.log(johnsonsu.pdf(dataset_in, loc=loc_param0, scale=sca_param0, nc=skewness_param0, df=tail_param0)))) / len(dataset_in)
+        my_grad = calculate_gradient_single_param(sp, dataset_in, consider_skewness, lim_params, loc_param0, sca_param0, skewness_param0, tail_param0)
     elif (distrib_type == "genhyperbolic"):
         from module_fitting_genhyperbolic import calculate_gradient_params, calculate_gradient_single_param
         loss0 = - (np.sum(np.log(genhyperbolic.pdf(dataset_in, loc=loc_param0, scale=sca_param0, b=skewness_param0, a=tail_param0,p=form_param0)))) / len(dataset_in)
@@ -1019,6 +1144,8 @@ def first_iteration_single_param( sp, dataset_in, distrib_type, consider_skewnes
 
         if (distrib_type == "nct"):
             loss1 = - (np.sum(np.log(nct.pdf(dataset_in, loc=loc_param0, scale=sca_param0, nc=updp1['b'], df=updp1['a'])))) / len(dataset_in)
+        elif (distrib_type == "johnsonsu"):
+            loss1 = - (np.sum(np.log(johnsonsu.pdf(dataset_in, loc=loc_param0, scale=sca_param0, a=updp1['a'], b=updp1['b'])))) / len(dataset_in)
         elif (distrib_type == "genhyperbolic"):
             loss1 = - (np.sum(np.log(genhyperbolic.pdf(dataset_in, loc=loc_param0, scale=sca_param0, b=updp1['b'], a=updp1['a'],p=form_param0)))) / len(dataset_in)
         elif (distrib_type == "levy_stable"):
@@ -1041,7 +1168,7 @@ def first_iteration_single_param( sp, dataset_in, distrib_type, consider_skewnes
     # If the loss of the new point is similar to that of the old point, yet higher, we swap the 0 and 1 points (including recalculation of the gradient at the point 0):
     if (loss1 > loss0):
         aux = updp1.copy(); updp1 = updp0.copy(); updp0 = aux.copy()
-        if ((distrib_type == "nct") or (distrib_type == "levy_stable")):
+        if ((distrib_type == "nct") or (distrib_type == "johnsonsu") or (distrib_type == "levy_stable")):
             my_grad = calculate_gradient_single_param(sp, dataset_in, consider_skewness, lim_params, loc_param0, sca_param0, updp0['b'], updp0['a'] )
         elif (distrib_type == "genhyperbolic"):
             my_grad = calculate_gradient_single_param(sp, dataset_in, consider_skewness, lim_params, loc_param0, sca_param0, updp0['b'], updp0['a'])
@@ -1051,3 +1178,4 @@ def first_iteration_single_param( sp, dataset_in, distrib_type, consider_skewnes
     return updp0, my_grad, updp1
 
 # ----------------------------------------------------------------------------------------------------------------------
+

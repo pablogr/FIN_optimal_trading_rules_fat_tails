@@ -134,7 +134,6 @@ def threshold_plus_delta( thrsh_in, enter_value, type_param, list_params ):
     return thrsh_out
 
 #-----------------------------------------------------------------------------------------------------------------------
-
 def define_start_points(  input_params, OU_params, rv_params, enter_value, pt1=None, sl1=None  ):
     '''This function finds a start guess for the calculation of the optimal pair of thresholds.
     It indeed provides the positions of the first two iterations to be used in the Barzilai-Borwein optimization.'''

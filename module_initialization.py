@@ -7,6 +7,7 @@ from os import getcwd, makedirs
 from sys import path
 import pandas as pd
 import numpy as np
+from numpy import log
 
 path.append(getcwd())
 import input         # This imports a file called input.py, which stores the user-defined input parameters, and is located
@@ -37,7 +38,7 @@ class InputParams:
         # Directory to store the data
         self.output_directory     = self.input_directory + "/Output";
         if not (os.path.exists(self.output_directory)): makedirs(self.output_directory)
-        self.output_downl_fit_dir = self.output_directory + "/Output_fitting"
+        #xxx self.output_downl_fit_dir = self.output_directory + "/Output_fitting"
         self.output_trad_rules_dir= self.output_directory + "/Output_trading_rules"
         self.output_oos_dir       = self.output_directory + "/Output_out-of-sample"
 
@@ -54,11 +55,19 @@ class InputParams:
         else:
             self.fit_data = False
 
+        # The variable below defines how the Spread is defined. If it is "y_vs_x" then the Spread is log(Price_{label_y}) - gamma·log(Price_{label_x}), where gamma is the slope of the Return_{label_y}-vs-Return_{label_x}. If it is "x_vs_y", then the prices and returns are swapped.
+        self.oos_spread_type = input.oos_spread_type
+        assert self.oos_spread_type in ["x_vs_y", "y_vs_x"]
+
+        # Labels of the products whose prices will take part in the out-of-sample calculation
+        self.oos_product_label_x = input.oos_product_label_x
+        self.oos_product_label_y = input.oos_product_label_y
+
         # Type of the probability distribution to fit the random variables. It must be either 'norm', 'nct', 'genhyperbolic' or 'levy_stable'.
         try:
             list_aux = input.list_distribution_types
-            self.list_distribution_types = ['norm', 'nct','genhyperbolic','levy_stable']
-            for distrib in ['norm', 'nct','genhyperbolic','levy_stable']: # We order the distributions
+            self.list_distribution_types = ['norm', 'nct','genhyperbolic','levy_stable', 'johnsonsu' ]
+            for distrib in ['norm', 'nct', 'genhyperbolic','levy_stable','johnsonsu']: # We order the distributions
                 if not (distrib in list_aux):
                     self.list_distribution_types.remove(distrib)
         except AttributeError:
@@ -89,17 +98,6 @@ class InputParams:
         try: self.efficient_fit_to_levy_stable = input.efficient_fit_to_levy_stable
         except AttributeError: self.efficient_fit_to_levy_stable = True
 
-        # Labels of the products whose time-series must be downloaded.
-        if (self.calculation_mode != "out_of_sample"):
-            self.list_product_labels_name = input.list_product_labels[0]
-            self.list_product_labels      = input.list_product_labels[1]
-        else:
-            self.list_product_labels_name = input.list_product_labels_name # Name of the list of products; it must be the one specified in <<list_product_labels>> when the download was performed.
-            self.list_product_labels = [ input.oos_product_label_x, input.oos_product_label_y ]
-
-        self.file_corr_path = self.output_directory + "/correlations_" + self.list_product_labels_name + ".csv"
-        self.file_stationarity_path = self.output_directory + "/stationarities_" + self.list_product_labels_name + ".csv"
-
         # Period of the data to download
         try: self.downloaded_data_period = input.downloaded_data_period
         except AttributeError: self.downloaded_data_period = None #'12y'
@@ -115,6 +113,45 @@ class InputParams:
         # Last date for our analysis (if unset, then it is the last date of the downloaded period); write in format "YYYY-MM-DD".
         try: self.last_downloaded_data_date = input.last_downloaded_data_date
         except AttributeError: self.last_downloaded_data_date = None
+
+        if (len(input.list_product_labels) > 2):
+            self.list_risk_factor_labels = input.list_product_labels[2]
+        else:
+            raise Exception( "\nERROR: Please, include a list of risk factors in the variable list_product_labels in input.in.\n")
+
+        # Defining the time series of the risk-free rate
+        if (len(input.list_product_labels) < 4):
+            print("\nWARNING: The risk-free rate will be assumed to be zero.\n")
+            self.risk_free_rate = pd.DataFrame(
+                index=pd.date_range(start=self.first_downloaded_data_date, end=self.last_downloaded_data_date, freq='B',tz=None))
+            self.risk_free_rate["risk_free_rate"] = 0
+        else:
+            risk_free_filename = str(input.list_product_labels[3])
+            df_Rf = pd.read_csv(os.path.join(self.ts_directory, risk_free_filename + ".csv"))
+            df_Rf["Date"] = pd.to_datetime(df_Rf["Date"])
+            df_Rf = df_Rf.sort_values('Date', ascending=True)
+            df_Rf.set_index("Date", inplace=True)
+            df_Rf["risk_free_rate"] = log(1 + df_Rf["Yield"] / 100)
+            if (self.first_downloaded_data_date != None):
+                df_Rf = df_Rf.loc[self.first_downloaded_data_date:]
+            if (self.last_downloaded_data_date != None):
+                df_Rf = df_Rf.loc[:self.last_downloaded_data_date]
+            self.risk_free_rate = pd.DataFrame(df_Rf["risk_free_rate"].copy())
+            del df_Rf;
+            del risk_free_filename
+
+        # Labels of the products whose time-series must be downloaded.
+        if (self.calculation_mode == "out_of_sample"):
+            self.list_product_labels_name = input.list_product_labels_name  # Name of the list of products; it must be the one specified in <<list_product_labels>> when the download was performed.
+            self.list_product_labels = [input.oos_product_label_x, input.oos_product_label_y]
+        else:
+            self.list_index_labels        = input.list_index_labels
+            self.list_product_labels_name = input.list_product_labels[0]
+            self.list_product_labels      = input.list_product_labels[1]
+
+
+        self.file_corr_path = self.output_directory + "/correlations_" + self.list_product_labels_name + ".csv"
+        self.file_stationarity_path = self.output_directory + "/stationarities_" + self.list_product_labels_name + ".csv"
 
         try:
             self.is_bond = input.is_bond
@@ -155,6 +192,7 @@ class InputParams:
             print("                          Now downloading time-series")
             print("===========================================================================================\n")
             print("The identifiers of the time-series to download are:\n", self.list_product_labels)
+            if (self.list_index_labels!=[]): print("\nThe indices to download are:\n", self.list_index_labels)
 
             if ( ((self.first_downloaded_data_date == None) or (self.last_downloaded_data_date == None)) and (self.downloaded_data_period==None) ):
                 self.downloaded_data_period = "12y"
@@ -167,12 +205,10 @@ class InputParams:
             print("The downloaded data are stored to", self.ts_directory)
 
 
-
         # Creation of directories to store data:
 
-
-        if ( self.calculation_mode in ["download", "fit", "download_and_fit","download_fit_and_find_trading_rules"]):
-            if not (os.path.exists(self.output_downl_fit_dir)): makedirs(self.output_downl_fit_dir)
+        #if ( self.calculation_mode in ["download", "fit", "download_and_fit","download_fit_and_find_trading_rules"]):
+        #    if not (os.path.exists(self.output_downl_fit_dir)): makedirs(self.output_downl_fit_dir)
         if (self.calculation_mode in ["find_trading_rules","download_fit_and_find_trading_rules" ]):
             for my_dir in [self.output_trad_rules_dir, self.output_trad_rules_dir+"/Plots", self.output_trad_rules_dir+"/Results"]:
                 if not (os.path.exists(my_dir)): makedirs(my_dir)
@@ -180,13 +216,14 @@ class InputParams:
             if not (os.path.exists(self.output_oos_dir)): makedirs(self.output_oos_dir)
 
 
-        list_directories = [self.ts_directory, self.ts_directory+"/Spreads",
+        list_directories = [self.ts_directory, self.ts_directory+"/Spreads", self.ts_directory+"/Spreads/gammas",
                             self.ts_directory+"/Plots", self.ts_directory+"/Spreads/Spreads_"+self.list_product_labels_name ,
                             self.ts_directory+"/Spreads/Spreads_"+self.list_product_labels_name + "/Data",
                             self.ts_directory + "/Spreads/Spreads_" + self.list_product_labels_name + "/Data/Fitting_parameters",
                             self.ts_directory+"/Spreads/Spreads_"+self.list_product_labels_name+"/Plots",
                             self.ts_directory + "/Spreads/Spreads_" + self.list_product_labels_name + "/Plots/Autocorrelations",
                             self.ts_directory+"/Spreads/Spreads_"+self.list_product_labels_name+"/Plots/Fitting_parameters"]
+
 
         try:
             self.check_convergence_trading_rules = input.check_convergence_trading_rules
@@ -199,6 +236,15 @@ class InputParams:
         for my_directory in list_directories:
             if not (os.path.exists(my_directory)): makedirs(my_directory)
 
+        file_name = self.ts_directory+"/Spreads/gammas/_README.txt"
+        content = "Files stored in this directory contain the gammas, this is the slopes of the clouds of points\n" \
+                  "of the COMMON TRENDS of the returns of two stocks or cryptocurrencies.\n" \
+                  "The code which calculates this can be found in module_fitting.py:\n" \
+                  '  slope_y_vs_x = linear_model.LinearRegression().fit( pd.DataFrame(df_ct["common_trend_x"]) ,pd.DataFrame(df_ct["common_trend_y"]) ).coef_[0][0]'+"\n"+'  slope_x_vs_y = linear_model.LinearRegression().fit(pd.DataFrame(df_ct["common_trend_y"]),pd.DataFrame(df_ct["common_trend_x"])).coef_[0][0]'
+        with open(file_name, 'w') as file:
+            file.write(content)
+        del file_name; del content
+
         if ((self.fit_data) or (self.download_data)):
             print("\n===========================================================================================")
             print("                            Now fitting data ")
@@ -210,7 +256,10 @@ class InputParams:
             except AttributeError:
                 self.correlation_threshold = 0.7
             if (self.correlation_threshold ==None): self.correlation_threshold = -1.1
-            print("The correlation lower threshold (below whose value a pair of products is ignored to define a Spread) is "+str(self.correlation_threshold)+".\n")
+            if (self.correlation_threshold < -1):
+                print("There is no correlation threshold imposed in the calculation of spreads.\n")
+            else:
+                print("The correlation lower threshold (below whose value a pair of products is ignored to define a Spread) is "+str(self.correlation_threshold)+".\n")
 
         try: self.verbose       = input.verbose           # If set to 1 or 2 intermediate results of the calculations are printed to screen.
         except AttributeError: self.verbose = 0
@@ -247,13 +296,14 @@ class InputParams:
         except AttributeError:
            self.path_rv_params = None
         if (self.path_rv_params == 'default'):
+
             self.path_rv_params = self.ts_directory + "/Spreads/Spreads_" + self.list_product_labels_name + "/Data/Fitting_parameters/spr_fitting_params_"+self.list_product_labels_name
             suffix=""
             for distr in self.list_distribution_types: suffix += "_"+distr
             self.path_rv_params += suffix+".csv"
             if not (os.path.exists(self.path_rv_params)):
                 print(self.path_rv_params, "NOT found")
-                self.path_rv_params = self.ts_directory + "/Spreads/Spreads_" + self.list_product_labels_name + "/Data/Fitting_parameters/spr_fitting_params_"+self.list_product_labels_name + "_norm_nct_genhyperbolic_levy_stable.csv"
+                self.path_rv_params = self.ts_directory + "/Spreads/Spreads_" + self.list_product_labels_name + "/Data/Fitting_parameters/spr_fitting_params_"+self.list_product_labels_name + "_norm_nct_genhyperbolic_levy_stable_johnsonsu.csv"
             if not (os.path.exists(self.path_rv_params)):
                 raise Exception("\n ERROR: The specified path to store the parameters of the random variables ("+str(self.path_rv_params)+")\n does not exist. Please, provide it.\n")
 
@@ -327,10 +377,8 @@ class InputParams:
             try: self.list_5thparam = input.list_5thparam      # List of 5th params of the distribution to try (optional)
             except AttributeError: self.list_5thparam = [None]
 
-
-
         try:
-            self.poisson_probability = np.float(max(min( np.float(input.poisson_probability), 1), 0))  # Probability of a Poisson event. Set to None for no Poisson events.
+            self.poisson_probability = float(max(min( float(input.poisson_probability), 1), 0))  # Probability of a Poisson event. Set to None for no Poisson events.
             if (self.poisson_probability == 0): self.poisson_probability = None
         except AttributeError:
             self.poisson_probability = None
@@ -376,6 +424,12 @@ class InputParams:
         for en in list_aux:
             if (abs(en)>0.0000000000001): self.list_enter_value.append(en)
             else: self.list_enter_value.append( 0.000000000000001 * np.sign(np.mean( np.array(list_aux))) )
+
+        # For plotting heatmaps we check that there is only one sign of enter values
+        if (self.calculation_mode=="find_trading_rules"):
+            check_ev = self.list_enter_value[0] * self.list_enter_value[-1]
+            if ((abs(check_ev)>0.00000001) and (check_ev<0) ):
+                raise Exception("\nERROR: In a calculation in mode 'find_trading_rules' all elements of list_enter_value must have the same sign.\nPlease, rewrite it in input.in and rerun your calculation.\n ")
 
         self.list_profit_taking = input.list_profit_taking # List of profit-taking thresholds toa analyse when plotting the heat-maps (2D plots to present the performance of the trading strategy)
         self.list_stop_loss     = input.list_stop_loss     # List of stop-loss thresholds toa analyse when plotting the heat-maps
@@ -436,7 +490,7 @@ class InputParams:
             print("\nNo transaction costs will be considered.")
         else:
             print("\nThe rate of transaction costs (yearly rate measured in units of currency) will be "+str(100*self.transaction_costs_rate)+" %.")
-            print(" This corresponds to a yearly rate of transaction costs for the spread c="+str(-np.log(1-self.transaction_costs_rate)))
+            print("This corresponds to a yearly rate of transaction costs for the spread c="+str(-np.log(1-self.transaction_costs_rate))+".")
 
         if ((self.discount_rate==None) or (abs(self.discount_rate)<0.000000001)): print("No discount factors will be considered.")
         else: print("The (yearly) rate used to calculate discount factors is "+str(100*self.discount_rate)+" %." )
@@ -469,7 +523,6 @@ class InputParams:
         print("The number of days that the strategy is expected to be used is "+str(self.strategy_duration )+";\nthis is the maximum time simulated in each iteration of the Monte Carlo algorithm used to find optimal rules.\n")
 
         if (self.output_type=="heat-map"):
-            if not (self.only_plots): print("The goal is to plot heat-maps. They will be elaborated using at least",self.min_num_trials,"calculations for each point.")
             if not (self.only_plots): print("The goal is to plot heat-maps. They will be elaborated using at least",self.min_num_trials,"calculations for each point.")
         else:
             print("The goal is to find the optimal thresholds which optimize the "+self.quantity_to_analyse+". Each pair of thresholds\nwill be evaluated using at least",self.min_num_trials,"calculations for each point.")
@@ -510,15 +563,15 @@ class InputParams:
             try:
                 self.oos_dollar_neutral = input.oos_dollar_neutral
             except AttributeError:
-                self.oos_dollar_neutral = True
+                self.oos_dollar_neutral = False
             if (self.oos_dollar_neutral):
                 print(" * In the out-of-sample calculations we will use dollar-neutral portfolios, this is we will buy (or sell) one unit of the product A\n    and sell (or buy) gamma' units of the product B, being gamma' the quotient between both prices as the time of entering.\n")
             else:
-                print(" * In the out-of-sample calculations we will NOT use dollar-neutral portfolios; we will buy (or sell) one unit of the product A\n   and sell (or buy) gamma units of the product B, where gamma is the slope of the regression between log-returns of A vs B.\n   Note that this is not recommended, because the so-generated pairs can be strongly non-dollar-neutral.\n")
-
+                print(" * In the out-of-sample calculations we will NOT use dollar-neutral portfolios; we will buy (or sell) one unit of the product A\n   and sell (or buy) gamma units of the product B, where gamma is the slope of the regression between log-returns of A vs B.\n")
 
             # The variable below defines how the Spread is defined. If it is "y_vs_x" then the Spread is log(Price_{label_y}) - gamma·log(Price_{label_x}), where gamma is the slope of the Return_{label_y}-vs-Return_{label_x}. If it is "x_vs_y", then the prices and returns are swapped.
-            self.oos_spread_type = input.oos_spread_type # "x_vs_y" or "x_vs_y
+            self.oos_spread_type = input.oos_spread_type
+            assert self.oos_spread_type in ["x_vs_y", "y_vs_x"]
 
             # Labels of the products whose prices will take part in the out-of-sample calculation
             self.oos_product_label_x = input.oos_product_label_x
@@ -533,21 +586,21 @@ class InputParams:
 
     def print_intial_message(self):
 
-        print("\n     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒╗")
-        print("     ▒▒                                                                                  ▒▒║")
-        print("     ▒▒                                                                                  ▒▒║")
-        print('     ▒▒          ██████╗   ██╗   ██╗   ██████╗    ██╗   ██╗   ██████╗  ████████╗         ▒▒║')
-        print('     ▒▒         ██╔═══██╗  ██║   ██║  ██╔════╝    ██║   ██║  ██╔════╝  ╚══██╔══╝         ▒▒║')
-        print('     ▒▒         ████████║  ██║   ██║  ██║  ████╗  ██║   ██║   ██████═╗    ██║            ▒▒║')
-        print('     ▒▒         ██╔═══██║  ██║   ██║  ██║   ██╔╝  ██║   ██║   ╚════██║    ██║            ▒▒║')
-        print('     ▒▒         ██║   ██║   ██████╔╝   ██████╔╝    ██████╔╝   ██████╔╝    ██║            ▒▒║')
-        print('     ▒▒         ╚═╝   ╚═╝   ╚═════╝    ╚═════╝     ╚═════╝    ╚═════╝     ╚═╝            ▒▒║')
-        print("     ▒▒                                                                                  ▒▒║")
-        print("     ▒▒   THE PROGRAM FOR THE ANALYSIS OF TRADING RULES USING FAT-TAILED DISTRIBUTIONS   ▒▒║")
-        print("     ▒▒                                (P. Risueno, 2023)                                ▒▒║")
-        print("     ▒▒                                                                                  ▒▒║")
-        print("     ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒║")
-        print("      ╚════════════════════════════════════════════════════════════════════════════════════╝\n")
+        print("\n      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒╗")
+        print("      ▒▒                                                                                  ▒▒║")
+        print("      ▒▒                                                                                  ▒▒║")
+        print('      ▒▒          ██████╗   ██╗   ██╗   ██████╗    ██╗   ██╗   ██████╗  ████████╗         ▒▒║')
+        print('      ▒▒         ██╔═══██╗  ██║   ██║  ██╔════╝    ██║   ██║  ██╔════╝  ╚══██╔══╝         ▒▒║')
+        print('      ▒▒         ████████║  ██║   ██║  ██║  ████╗  ██║   ██║   ██████═╗    ██║            ▒▒║')
+        print('      ▒▒         ██╔═══██║  ██║   ██║  ██║   ██╔╝  ██║   ██║   ╚════██║    ██║            ▒▒║')
+        print('      ▒▒         ██║   ██║   ██████╔╝   ██████╔╝    ██████╔╝   ██████╔╝    ██║            ▒▒║')
+        print('      ▒▒         ╚═╝   ╚═╝   ╚═════╝    ╚═════╝     ╚═════╝    ╚═════╝     ╚═╝            ▒▒║')
+        print("      ▒▒                                                                                  ▒▒║")
+        print("      ▒▒   THE PROGRAM FOR THE ANALYSIS OF TRADING RULES USING FAT-TAILED DISTRIBUTIONS   ▒▒║")
+        print("      ▒▒                            (P. Risueño, 2023-2025)                               ▒▒║")
+        print("      ▒▒                                                                                  ▒▒║")
+        print("      ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒║")
+        print("       ╚════════════════════════════════════════════════════════════════════════════════════╝\n")
 
         print("\n                                           See references:\n")
         print("                                  ● M. López de Prado, 'Advances in")
@@ -555,9 +608,9 @@ class InputParams:
         print("                          ● A. Göncü, E. Akyildirim, 'A stochastic model for   ")
         print("                        commodity pairs trading', Quantitative Finance (2016); ")
         print("                   /█\    ● Pablo Risueño et al., 'The effect of fat tails on   /█\                                 ")
-        print("                   ███       rules for optimal pairs trading of stocks and      ███                                 ")
-        print("                  /███\         cryptocurrencies based on the Ornstein-        /███\                                ")
-        print("                  |███|                Uhlenbeck equation' (2023).             |███|                                ")
+        print("                   ███      rules for optimal pairs trading', SSRN, (2023).     ███                                 ")
+        print("                  /███\                                                        /███\                                ")
+        print("                  |███|                                                        |███|                                ")
         print("                  |███|                                                        |███|                                ")
         print("                  █████                                                        █████                                ")
         print("                 |█████|                                                      |█████|                               ")

@@ -6,7 +6,7 @@ Suggestion (2021-10-12): set: tolerance_fitting = 0.000005; max_n_iter = 150; n_
 '''
 
 
-from scipy.stats import levy_stable, cauchy
+from scipy.stats import levy_stable
 import numpy as np
 from math import isnan
 np.seterr(invalid='ignore') # This tells NumPy to hide any warning with some “invalid” message in it.
@@ -68,9 +68,9 @@ def find_starting_point( dataset_in, consider_skewness = True, res_nct={'nct_loc
         if ( consider_skewness == False ):
            li_beta_params_sg = [0]
         else:
-           li_beta_params_sg = [  np.sign(res_nct['nct_skparam'])*min( 0.9*abs(res_nct['nct_skparam']), 0.35)  ]
+           li_beta_params_sg = [ 0,  np.sign(res_nct['nct_skparam'])*min( 0.9*abs(res_nct['nct_skparam']), 0.35)  ]
            #if (np.sign(skewness_dataset)!=np.sign(res_nct['nct_skparam'])):  li_beta_params_sg.append( 0.6 / (1 + np.exp(-4*skewness_dataset)) - 0.3 ) # This line does not seem to help. The sign of alpha_param is usually the same as the sign of the nct-skewness-param, even if it is opposite to the sign of the skewness of the data.
-        li_alpha_params_sg = [ min(0.11*res_nct['nct_dfparam']+1.26,1.8) ]
+        li_alpha_params_sg = [ 1, 1.2, 1.68, min(0.11*res_nct['nct_dfparam']+1.26,1.8) ]
     else:
         li_locations_sg =  [ np.median(dataset_in) ]
         li_scalings_sg  =  [ sca_guess ]
@@ -78,7 +78,7 @@ def find_starting_point( dataset_in, consider_skewness = True, res_nct={'nct_loc
            li_beta_params_sg = [0]
         else:
             li_beta_params_sg = [ 0.6 / (1 + np.exp(-4*skewness_dataset)) - 0.3 ]
-        li_alpha_params_sg = [ 1.68 ] # 1 corresponds to Cauchy; 2 corresponds to Gaussian. We choose these values because we check that our functions (single sweep of 'a' param) can easily change it from 1.31 to 1.51 in one single iteration.
+        li_alpha_params_sg = [ 1.25, 1.68 ] # 1 corresponds to Cauchy; 2 corresponds to Gaussian. We choose these values because we check that our functions (single sweep of 'a' param) can easily change it from 1.31 to 1.51 in one single iteration.
 
     del dataset_in; del consider_skewness; del myvar; del skewness_dataset;
 
@@ -134,14 +134,22 @@ def fit_to_stable_global_minimum( dataset_in,  n_random_tries,  max_n_iter, cons
     return { 'distribution_type':'levy_stable', 'loc_param': loc_param_opt, 'scale_param':sca_param_opt, 'beta_param':beta_param_opt, 'alpha_param':alpha_param_opt, 'loss':loss_opt }
 
 #------------------------------------------------------------------------------------------------
-
 def capfloor_params(lim_params,  loc_param1, sca_param1, beta_param1, alpha_param1 ):
 
-    loc_param1 = np.sign(loc_param1) * min(abs(loc_param1), lim_params.max_allowed_abs_loc  )
-    sca_param1 = max(sca_param1, lim_params.min_allowed_scale); sca_param1 = min(sca_param1, lim_params.max_allowed_scale);
-    beta_param1 = np.sign(beta_param1) * min( abs( beta_param1 ), lim_params.max_allowed_abs_skewparam )
-    alpha_param1 = np.sign(alpha_param1) * min( abs(alpha_param1), lim_params.max_allowed_abs_a)
-    alpha_param1 = np.sign(alpha_param1) * max( abs(alpha_param1), lim_params.min_allowed_abs_a)
+    try: loc_param1 = np.sign(loc_param1) * min(abs(loc_param1), lim_params.max_allowed_abs_loc  )
+    except TypeError: loc_param1 = 0
+
+    try: sca_param1 = max(sca_param1, lim_params.min_allowed_scale); sca_param1 = min(sca_param1, lim_params.max_allowed_scale);
+    except TypeError: sca_param1 = 0.01
+
+    try: beta_param1 = np.sign(beta_param1) * min( abs( beta_param1 ), lim_params.max_allowed_abs_skewparam )
+    except TypeError: beta_param1 = 0
+
+    try:
+        alpha_param1 = np.sign(alpha_param1) * min( abs(alpha_param1), lim_params.max_allowed_abs_a)
+        alpha_param1 = np.sign(alpha_param1) * max(abs(alpha_param1), lim_params.min_allowed_abs_a)
+    except TypeError:
+            alpha_param1 = 1.7
 
     # The generalized hyperbolic distribution demands that |a|>=|b|, otherwise complex numbers appear. We modify a because b varies slowly.
     #if ( abs(beta_param1) >= abs(alpha_param1) ):
@@ -177,6 +185,14 @@ def fit_to_levy_stable_local_minimum( dataset_in, max_n_iter, consider_skewness,
     loss0, loc_param0, sca_param0, beta_param0, alpha_param0, trash1, grad_loc0, grad_sca0, grad_beta0, grad_alpha0, trash2, loss1, loc_param1, sca_param1, beta_param1, alpha_param1, trash3 = first_iteration(dataset_in, 'levy_stable', consider_skewness, loc_param0, sca_param0, beta_param0, alpha_param0, None, False, verbose )
     loss_opt, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt = update_optimal_parameters(loss1,loc_param1,sca_param1,beta_param1,alpha_param1,loss0,loc_param0,sca_param0,beta_param0,alpha_param0)
 
+    # Preliminary sweeping of scaling and alpha parameter using equispaced grids
+    loss_opt, sca_param_opt = fit_to_levy_stable_local_minimum_sweep_sca(dataset_in, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt, verbose)
+    loss_opt, alpha_param_opt = fit_to_levy_stable_local_minimum_sweep_alpha(dataset_in, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt, verbose)
+    loss_opt, sca_param_opt = fit_to_levy_stable_local_minimum_sweep_sca(dataset_in, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt, verbose)
+    loss_opt, alpha_param_opt = fit_to_levy_stable_local_minimum_sweep_alpha(dataset_in, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt, verbose)
+    loss_opt, sca_param_opt = fit_to_levy_stable_local_minimum_sweep_sca(dataset_in, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt, verbose)
+    alpha_param1 = alpha_param_opt; sca_param1 = sca_param_opt
+
     if (None in [loc_param0, sca_param0, beta_param0, alpha_param0]):
         del dataset_in; del max_n_iter; del consider_skewness; del lim_params;  del loc_param0; del sca_param0; del alpha_param0; del beta_param0; del verbose; del trash1; del trash2; del trash3
         return 9999, None, None, None, None
@@ -208,7 +224,7 @@ def fit_to_levy_stable_local_minimum( dataset_in, max_n_iter, consider_skewness,
         # Find the loss
         try:
             loss1 = - (np.sum( np.log( levy_stable.pdf(dataset_in, loc=loc_param1, scale=sca_param1, beta=beta_param1, alpha=alpha_param1) ) ))/len(dataset_in)
-            if ((loss1 > -2) or isnan(loss1)):
+            if ( isnan(loss1)):
                 loc_param1 = uniform(-0.0001,0.0001); sca_param1 = uniform(0.001,0.01); beta_param1 = 0 ; alpha_param1 = uniform(1.5,1.8)
         except RuntimeWarning:
             loc_param1 = uniform(-0.0001,0.0001); sca_param1 = uniform(0.001,0.01); beta_param1 = 0 ; alpha_param1 = uniform(1.5,1.8)
@@ -216,7 +232,7 @@ def fit_to_levy_stable_local_minimum( dataset_in, max_n_iter, consider_skewness,
         if ((abs(loss1 - loss0) < tolerance_fitting) and (n_iter < max_n_iter / 2)):
             loc_param1 *= 0.9; sca_param1*=uniform(0.75,1.5); beta_param1*=0.9; alpha_param1 += uniform(-0.15,0.15)
 
-        if (verbose > 1): print("iter ", n_iter, ") Params", loc_param1, sca_param1, beta_param1, alpha_param1,"; loss=", loss1)
+        if (verbose >= 1): print("iter ", n_iter, ") Params", loc_param1, sca_param1, beta_param1, alpha_param1,"; loss=", loss1)
 
         if  ((n_iter%3)==0):
             for sp in list_single_sweep:
@@ -227,6 +243,55 @@ def fit_to_levy_stable_local_minimum( dataset_in, max_n_iter, consider_skewness,
     del dataset_in; del max_n_iter; del consider_skewness; del lim_params; del loc_param0; del sca_param0; del beta_param0; del alpha_param0
 
     return loss_opt, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt
+
+#----------------------------------------------------------------------------------------------------------------------
+
+def fit_to_levy_stable_local_minimum_sweep_sca( dataset_in, loc_param0, sca_param0, beta_param0, alpha_param0, verbose ):
+
+    li_sca = np.arange( sca_param0*0.75, sca_param0*1.25, sca_param0/80)
+
+    loss_opt=999; loc_param_opt=loc_param0; sca_param_opt=sca_param0; beta_param_opt=beta_param0; alpha_param_opt=alpha_param0
+
+    for sca in li_sca:
+
+        # Find the loss
+        try:
+            loss1 = - (np.sum(np.log( levy_stable.pdf(dataset_in, loc=loc_param0, scale=sca, beta=beta_param0, alpha=alpha_param0)))) / len(dataset_in)
+            loss_opt, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt = update_optimal_parameters(loss1,loc_param0,sca,beta_param0,alpha_param0, loss_opt,loc_param_opt,sca_param_opt,beta_param_opt,alpha_param_opt)
+            if (verbose > 1): print("      scale", sca,   "; loss=", loss1)
+            if ( isnan(loss1)): break
+        except RuntimeWarning:
+            break  # loc_param1 =  uniform(-1,1); sca_param1 = uniform(0.2,2); beta_param1 = 0 ; alpha_param1 = uniform(2,4); 1 = 0
+
+    del dataset_in;
+
+    if (verbose >= 1): print("Sweeping in scale: in",sca_param0,"out",sca_param_opt)
+
+    return loss_opt, sca_param_opt
+
+#----------------------------------------------------------------------------------------------------------------------
+def fit_to_levy_stable_local_minimum_sweep_alpha( dataset_in, loc_param0, sca_param0, beta_param0, alpha_param0, verbose ):
+
+    li_alpha = np.arange( 1, 1.85, 0.01)
+
+    loss_opt=999; loc_param_opt=loc_param0; sca_param_opt=sca_param0; beta_param_opt=beta_param0; alpha_param_opt=alpha_param0
+
+    for alpha in li_alpha:
+
+        # Find the loss
+        try:
+            loss1 = - (np.sum(np.log( levy_stable.pdf(dataset_in, loc=loc_param0, scale=sca_param0, beta=beta_param0, alpha=alpha )))) / len(dataset_in)
+            loss_opt, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt = update_optimal_parameters(loss1,loc_param0,sca_param0,beta_param0,alpha, loss_opt,loc_param_opt,sca_param_opt,beta_param_opt,alpha_param_opt)
+            if (verbose > 1): print("      alpha", alpha,   "; loss=", loss1)
+            if ( isnan(loss1)): break
+        except RuntimeWarning:
+            break  # loc_param1 =  uniform(-1,1); sca_param1 = uniform(0.2,2); beta_param1 = 0 ; alpha_param1 = uniform(2,4); 1 = 0
+
+    del dataset_in;
+
+    if (verbose >= 1): print(" Sweeping in alpha: in",alpha_param0,"out",alpha_param_opt)
+
+    return loss_opt, alpha_param_opt
 
 #----------------------------------------------------------------------------------------------------------------------
 
@@ -254,7 +319,7 @@ def fit_to_levy_stable_local_minimum_sweep_single_param( sp, dataset_in, conside
     loc_param0, sca_param0, updp1['b'], updp1['a']  = capfloor_params(lim_params, loc_param0, sca_param0, updp1['b'],updp1['a'] )
 
     # Sweeping to find the local minimum
-    max_n_iter = 8
+    max_n_iter = 20
     n_iter=0
     while ( ( (( abs(loss1 - loss0) > tolerance_fitting) or (metropolis > 0.9) ) or (loss1 == 9999) ) and (n_iter < max_n_iter) ):
 
@@ -274,7 +339,7 @@ def fit_to_levy_stable_local_minimum_sweep_single_param( sp, dataset_in, conside
         try:
             loss1 = - (np.sum( np.log( levy_stable.pdf(dataset_in, loc=loc_param0, scale=sca_param0, beta=updp1['b'], alpha=updp1['a']  ) ) ))/len(dataset_in)
             if (verbose > 1): print("    --- mini-iter: ",n_iter,"Params: loc=",loc_param0, "scale",sca_param0,"b",updp1['b'], "a",updp1['a'],"; loss=",loss1 )
-            if ((loss1 > -2) or isnan(loss1)):
+            if ( isnan(loss1)):
                 break
         except RuntimeWarning:
             break #loc_param1 = uniform(-1,1); sca_param1 = uniform(0.2,2); beta_param1 = 0 ; alpha_param1 = uniform(2,4); 1 = 0
@@ -284,7 +349,7 @@ def fit_to_levy_stable_local_minimum_sweep_single_param( sp, dataset_in, conside
 
     del dataset_in; del max_n_iter; del lim_params;  del loc_param0; del sca_param0; del beta_param0; del alpha_param0
 
-    return  loss_opt, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt
+    return loss_opt, loc_param_opt, sca_param_opt, beta_param_opt, alpha_param_opt
 
 #------------------------------------------------------------------------------------------------
 

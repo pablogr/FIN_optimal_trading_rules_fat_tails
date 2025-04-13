@@ -4,9 +4,10 @@ Ornstein-Uhlenbeck or single-product).'''
 
 import numpy as np
 from numpy.random import uniform
-from scipy.stats import norm, nct, genhyperbolic, levy_stable, uniform #from random import gauss
+from scipy.stats import norm, nct, johnsonsu, genhyperbolic, levy_stable, uniform #from random import gauss
 # import pandas as pd
 import module_parameters
+from math import isnan
 
 
 #----------------------------------------------------------------------------------------
@@ -17,30 +18,6 @@ def find_quantity_to_optimize( quantity, profit_mean, profit_std  ):
     if (quantity=="profit_std"):   return profit_std
     raise Exception("\nERROR: The quantity to optimize "+str(quantity)+" must be in: [profit_mean, profit_std, Sharpe_ratio].")
 
-#---------------------------------------------------------------------------------------------------------------------
-
-'''
-
-# Logarithm of the discount factor per unit time (e.g. per day if each row of the inputted time series corresponds to one day). If absent or set to None or to zero then discount factor is 1 (i.e. no discount factor is applied). For example, if set to log(1/(1+0.04))/365 being the periodicity one day, it corresponds to a one-year discount rate of 4%. 
-#log_discount_factor_unit_time =  log(1/(1+0.04))/365
-#discount_factor_update_method = "weekly"
-
-def update_discount_factor( DF, iteration, discount_factor_unit_time, discount_factor_update_method ):
-    #This function updates the discount factor
-
-    if ( (discount_factor_unit_time==0) or (discount_factor_unit_time==None) ):
-        return 1
-    if (discount_factor_update_method=="homogeneous"):
-        #print(iteration, ") in=",DF,"; out=",DF * discount_factor_unit_time)
-        return DF * discount_factor_unit_time
-    elif (discount_factor_update_method=="weekly"):
-        if ( ((iteration+1)%5 )==0 ):
-            return DF * discount_factor_unit_time * discount_factor_unit_time * discount_factor_unit_time
-        else:
-            return DF * discount_factor_unit_time
-    else:
-        raise Exception("\nERROR: Unrecognized disctounting periodicity "+str(discount_factor_update_method)+"\n")
-'''
 #---------------------------------------------------------------------------------------------------------------------
 
 def adapt_lists_thresholds(input_params, enter_value):
@@ -92,6 +69,10 @@ def generate_random_variable( evolution_type, rv_params, array_size, seed_factor
 
     np.random.seed( seed=( round(seed_factor) ) )
 
+
+    if (isnan(rv_params['sigma']) or isnan(rv_params['sigma'])):
+        raise Exception("\nERROR: The parameters of the distribution were not properly read: "+str(rv_params)+"\nPlease, rerun your fitting calculation or copy appropriate values in the fitting file.\n")
+
     distr = rv_params['distribution_type']
 
     if ( ( evolution_type == "single_product") and ( distr == "norm") ): # We use the closed form of geometric Brownian motion, not its discretized equation
@@ -101,6 +82,8 @@ def generate_random_variable( evolution_type, rv_params, array_size, seed_factor
         return norm.rvs(size=array_size, loc=rv_params['mu'], scale=rv_params['sigma']  ) # MLdP (slow): rv_params['sigma'] * gauss(0, 1)
     elif ( distr == "nct"):
         return nct.rvs(size=array_size, loc=rv_params['mu'], scale=rv_params['sigma'], nc=rv_params['third_param'], df=rv_params['fourth_param'] )
+    elif ( distr == "johnsonsu"):
+        return johnsonsu.rvs(size=array_size, loc=rv_params['mu'], scale=rv_params['sigma'], a=rv_params['third_param'], b=rv_params['fourth_param'] )
     elif ( distr == "genhyperbolic"):
         return genhyperbolic.rvs(size=array_size, loc=rv_params['mu'], scale=rv_params['sigma'], b=rv_params['third_param'], a=rv_params['fourth_param'], p=rv_params['fifth_param'] )
     elif ( distr == "levy_stable" ):
@@ -186,7 +169,7 @@ def find_thresholds( mh, enter_value, pt, sl, input_params, OU_params, rv_params
         if (input_params.method_for_calculation_of_profits == "enter_ensured"):
             results = find_thresholds_ensured_enter_OU( mh, enter_value, pt, sl, input_params, OU_params, rv_params, min_num_trials, tolerance )
         else: # method_for_calculation_of_profits is "enter_random_one_deal", "enter_random_many_deals"
-            results = find_thresholds_random_enter_OU( mh, enter_value, pt, sl, input_params, OU_params, rv_params, min_num_trials, tolerance )
+            results = find_thresholds_random_enter_OU( mh, enter_value, pt, sl, input_params, OU_params, rv_params, min_num_trials  )
 
     else: # input_params.evolution_type is "single_product"
 
@@ -196,9 +179,8 @@ def find_thresholds( mh, enter_value, pt, sl, input_params, OU_params, rv_params
 
     return results
 
-#----------------------------------------------------------------------------------------
-
-def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params, OU_params, rv_params, min_num_trials, tolerance ):
+#-------------------------------------------------------------------------------------------------
+def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params, OU_params, rv_params, min_num_trials ):
     ''' This function finds the optimal strategy (i.e. the optimal profit-taking and stop-loss thresholds) for the given
     input parameters. It is based on the function called "batch", written by Marcos Lopez de Prado, and available in
     https://quantresearch.org/OTR.py.txt and in Chapter 13 of his book "Advances in financial machine learning".
@@ -206,7 +188,8 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
     specified by the user. It repeats this process for many iterations. In each of these periods, the starting value of
     the spread is assumed to be its mean (in an Ornstein-Uhlenbeck process the mean the spread tends to).
 
-    :param pt, sl: (floats) profit-taking and stop-loss thresholds to analyse.
+    :param horizon: (integer): Horizon of the investment.
+    :param enter_value, pt, sl: (floats) profit-taking and stop-loss thresholds to analyse.
     :param input_params: (class) User-defined input parameters for the calculation
     :param OU_params: (class containing floats) Parameters of the Ornstein-Uhlenbeck equation: "E0" is the mean-reversion parameter, "tau" is the
     half-life parameter (which determines the speed parameter phi), and "sigma" is the standard deviation of the residuals
@@ -223,6 +206,8 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
     :return: average and standard deviation of the calculation of profits (prices or returns).
     '''
 
+    # np.random.seed(seed=1234)
+
     assert (input_params.evolution_type == "Ornstein-Uhlenbeck_equation")
 
     strategy_duration = input_params.strategy_duration
@@ -234,7 +219,7 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
     t_in = None; p_in = None;
     ornuhl_slope = OU_params['phi']
     enter_value += OU_params['E0']    # We define the "enter_value" with respect to the mean-reverting mean
-    pt += OU_params['E0'];  sl += OU_params['E0']  # Correspondingly, we must also offset the profit-taking and stop-loss parameters, because they are defined wrt to the enter_value (see function adapt_lists_thresholds).
+    pt += OU_params['E0'];  sl += OU_params['E0']  # Correspondingly, we must also offset the profit-taking and stop-loss parameters, because they are defined wrt the enter_value (see function adapt_lists_thresholds).
 
     #print(" params OU: phi=",OU_params['phi'],"E0=",OU_params['E0'])
     #print("Enter=",enter_value, ";PT=",pt)
@@ -243,11 +228,15 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
     rv_poisson_array = None
 
 
+    if (rv_params['distribution_type']=='levy_stable'):
+        min_num_trials = int(min_num_trials/2)
+        print("\n WARNING: For levy_stable distribution we will use",min_num_trials,"Monte Carlo paths.")
 
-    j=0
-    for iter_ in range(min_num_trials):
 
-        #print("NEW ITERATION\n mh=",horizon,"en=",enter_value,"pt=",pt, "sl=", sl)
+    for iter_ in range(min_num_trials+1):
+
+        # print("\n\nNEW ITERATION\n iter_",iter_,"\n mh=",horizon,"en=",enter_value,"pt=",pt, "sl=", sl)
+        j = iter_ * input_params.strategy_duration
 
         ornuhl_y0 = (1 - OU_params['phi']) * OU_params['E0']
         E0 = OU_params['E0'] # E0 is the mean the Ornstein-Uhlenbeck process tends to; it can change several times due to Poisson events (if activated). However, the investor is not aware of that changes, and hence for his decisions he uses OU_params['E0'] (wich is constant), not E0.
@@ -267,10 +256,11 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
             if (poisson_probability != None):
                 if ((j % size_array_rv) == 0): rv_poisson_array = uniform.rvs(size=size_array_rv)
                 if (rv_poisson_array[j % size_array_rv] > 1 - poisson_probability):
+                    #print(" Poisson event. Invested=",invested,"p=",p,"p_in=",p_in,". enter_value, pt, sl:",enter_value, pt, sl,"\nOld E0:",E0)
                     if (rv_poisson_array[j % size_array_rv] > 1 - poisson_probability/2 ): # We assign 50% probability to increase or decrease of E0
-                         E0 *= (1 + input_params.new_value_after_poisson_event_increase)  # xx CHECK!
+                         E0 += input_params.new_value_after_poisson_event_increase  # xx CHECK!
                     else:
-                         E0 *= (1 + input_params.new_value_after_poisson_event_decrease)
+                         E0 += input_params.new_value_after_poisson_event_decrease
                     ornuhl_y0 = (1 - OU_params['phi']) * E0
                     #print("Poisson event: The E0 is now",E0 )
 
@@ -281,23 +271,26 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
                     invested=True
                     t_in = time_
                     p_in = p
-                    #print("p=",p,"Now entering")
+                    #print("p=",p,"Now entering, j=",j)
             else: # We are invested, hence we seek to unwind our position
                 if ( ( time_-t_in > horizon ) or (time_ == strategy_duration-1) or ((enter_value < OU_params['E0']) and ( (p > pt) or (p < sl) ) ) or ((enter_value >= OU_params['E0']) and ( (p < pt) or (p > sl) ) )  ):
-                    #DF = 1 #update_discount_factor(DF, time_, DFunit, input_params.discount_factor_update_method)
+
+                    #if ( ((enter_value < OU_params['E0']) and (  (p < sl) ) ) or (((enter_value >= OU_params['E0']) and (  (p > sl) ) ))) :
+                    #    print("Now exiting because of Stop-loss, j=",j)
+
                     if (tcrate!=None): tc = np.log( 1 - tcrate * ((time_-t_in+1+int((time_-t_in)/5)*2)/365) ) # transaction cost (in units of spread)
                     else: tc = 0
                     if (discount_rate!=None): DF = np.exp( - discount_rate * ((time_+1+int((time_)/5)*2)/365)  )
                     else: DF = 1
-                    #print("Ndays=",(time_+1+int((time_)/5)*2),"; DF=", DF, "antes=", (p - p_in + tc), "; despues=", (p - p_in + tc) * DF)
+                    # print("Ndays=",(time_+1+int((time_)/5)*2),"; DF=", DF, "antes=", (p - p_in + tc), "; despues=", (p - p_in + tc) * DF)
                     iter_profit += (p - p_in + tc)*DF
-                    #print("Now exiting with a profit of", iter_profit, "(", p_in, ";", p, "last profit was",p-p_in,")\n")
+
+                    # print("Now exiting with a profit of", iter_profit, "(", p_in, ";", p, "last profit was",p-p_in,"); j=",j,"\n")
                     invested = False
                     p_in = None
                     if (input_params.method_for_calculation_of_profits=="enter_random_one_deal"): break
-                    # If stop-loss was realised, we stop investing in this cycle (iteration) beacuse the E0 may have changed
-                    if (   ( (enter_value < OU_params['E0'])  and (p < sl) )  or ((enter_value >= OU_params['E0']) and (p > sl) ) ):
-                        break
+                    # After exiting a position, we move to the next iteration (i.e. to the next Monte Carlo path).
+                    break
         if ( (input_params.evolution_type=="Ornstein-Uhlenbeck_equation") and (input_params.method_for_calculation_of_profits == "enter_random_many_deals") ):
             iter_profit *= (252/strategy_duration) # We annualize the cumulative return
         if (enter_value > OU_params['E0']-delt): iter_profit *= -1   # If we had a short position on the spread, we have to change the sign of the profit
@@ -317,7 +310,7 @@ def find_thresholds_random_enter_OU( horizon, enter_value, pt, sl, input_params,
         file_object.close()
         del df0; del filepathprofits
 
-    del enter_value; del pt; del sl; del input_params; del OU_params; del rv_params; del min_num_trials; del tolerance
+    del enter_value; del pt; del sl; del input_params; del OU_params; del rv_params; del min_num_trials
     del arr_profit; del rv_array; del p; del time_; del p_in; del t_in; del iter_profit;
 
     return results
@@ -359,7 +352,7 @@ def find_thresholds_ensured_enter_OU( mh, enter_value, pt, sl, input_params, OU_
 
     E0 = OU_params['E0']
     enter_value += E0   # We define the "enter_value" with respect to the mean-reverting mean
-    pt += E0; sl += E0  # Correspondingly, we must also offset the profit-taking and stop-loss parameters, because they are defined wrt to the enter_value (see function adapt_lists_thresholds).
+    pt += E0; sl += E0  # Correspondingly, we must also offset the profit-taking and stop-loss parameters, because they are defined wrt the enter_value (see function adapt_lists_thresholds).
 
     tcrate = input_params.transaction_costs_rate  # rate for transaction cost (to be used in the calculation of transaction costs in units of spread)
     discount_rate = input_params.discount_rate    # Rate for discounting the value of the profits
@@ -392,14 +385,15 @@ def find_thresholds_ensured_enter_OU( mh, enter_value, pt, sl, input_params, OU_
             # Poisson event
             if (poisson_probability != None):
                 if ((j % size_array_rv) == 0): rv_poisson_array = uniform.rvs(size=size_array_rv)
-                if (rv_poisson_array[j % size_array_rv] > 1 - poisson_probability): p = value_after_poisson
+                if (rv_poisson_array[j % size_array_rv] > 1 - poisson_probability):
+                    p = value_after_poisson
+
 
             j += 1
             time_ += 1
 
             #cP=(p - enter_value); if ( ( cP > pt ) or ( cP < sl ) or ( time_ > mh ) ): # MLdP original: << cP<-comb_[1] (i.e. sl) >> (negative sign)
             if (( time_ > mh ) or ((enter_value < E0) and ((p > pt) or (p < sl))) or ((enter_value >= E0) and ((p < pt) or (p > sl)))):
-                #DF = 1 # update_discount_factor(DF, time_, DFunit, input_params.discount_factor_update_method)
                 if (tcrate != None):  tc = np.log(1 - tcrate * ( (time_ + 1 + int((time_) / 5) * 2) / 365))  # transaction cost (in units of spread)
                 else: tc = 0
                 if (discount_rate != None):  DF = np.exp(- discount_rate * ((time_ + 1 + int((time_) / 5) * 2) / 365))
@@ -473,7 +467,6 @@ def find_thresholds_single( mh, pt, sl, input_params, rv_params, min_num_trials,
             time_ += 1; j+=1
 
             if (( time_ > mh ) or (p >= pt) or (p <= sl)):
-                #DF = 1 # update_discount_factor(DF, time_, DFunit, input_params.discount_factor_update_method)
                 if (tcrate != None): tc =  - tcrate * ( (time_ + 1 + int((time_) / 5) * 2) / 365)   # transaction cost (in units of spread)
                 else: tc = 0
                 if (discount_rate != None):  DF = np.exp(- discount_rate * ((time_ + 1 + int((time_) / 5) * 2) / 365))
@@ -502,9 +495,102 @@ def find_thresholds_single( mh, pt, sl, input_params, rv_params, min_num_trials,
 
 #----------------------------------------------------------------------------------------
 
+def define_unobservable_state_for_mean_reversion_start_alpha0( seed_factor,size,alpha0,alpha1,q,p):
+    '''This function defines a random vector (unobservable state) whose entries are either 0 or 1; 0 corresponds
+    to the case where the mean reversion parameter is (alpha0), 1 corresponds to the case where the mean reversion
+    parameter is (alpha0+alpha1).'''
+
+    np.random.seed(seed=(round(seed_factor)))
+
+    v_aux_s = np.random.uniform(low=0.0, high=1.0, size=size - 1)
+
+    s_t = np.zeros(size)
+    s_t[0] = 0 # IMPORTANT: For simplicity's sake, our analysis of trading rules with regime switching is limited to the case where the spread is alpha0 at the beginning, and we enter a deal when the spread is somewhere above alpha0.
+
+    # Definition of an arbitrary vector of unobservable states s_t
+    for i in range(1,len(s_t)):
+        if (s_t[i-1]==0):
+            if (v_aux_s[i-1] < q ): s_t[i]=0
+            else:  s_t[i] = 1
+        elif (s_t[i-1]==1):
+            if (v_aux_s[i-1] < p ): s_t[i]=1
+            else:  s_t[i] = 0
+        else:
+            print(s_t)
+            raise Exception("ERROR: Incorrect value for s_t.\n")
+
+    if   (s_t[0]==0): y0= alpha0
+    elif (s_t[0]==1): y0 = alpha0+alpha1
+    else: raise Exception("ERROR: Incorrect value for s_t.\n")
+
+    del size; del q; del p; del v_aux_s; del alpha0; del alpha1
+
+    return s_t
+
+#----------------------------------------------------------------------------------------------------------------------
+
+def calculate_traded_volumes( stock_ticker,year,path_file_constituents ):
+    '''This function approximately calculates the total traded volume (measured in USD) of the stocks which presently
+    form a given index like the SP500.
+    You can download the list of the Yahoo Finance tickers of the SP500 index e.g. from 'https://github.com/datasets/s-and-p-500-companies/blob/main/data/constituents.csv'
+    and save the file to the location given by << path_sp500_constituents >>.
+
+    Example calls:
+
+    calculate_traded_volumes_sp500( "AAPL", 2023, '/Users/pablogarciarisueno/PycharmProjects/paper_ES/constituentsSP500.csv' )
+    calculate_traded_volumes_sp500( "SHEL", 2023, '/Users/pablogarciarisueno/PycharmProjects/paper_ES/constituentsStoxx600.csv' )
+    '''
+
+    import pandas as pd
+    import yfinance as yf
+
+    print(" Now reading the list of the SP500 constituents from",path_file_constituents)
+
+    df_constituents = pd.read_csv(path_file_constituents, header=0)
+    li_constituents = df_constituents[list(df_constituents)[0]] #'https://github.com/datasets/s-and-p-500-companies/blob/main/data/constituents.csv')
+    df_results = pd.DataFrame( index=li_constituents, columns=["VolumeBillionUSD"] )
+
+    for product_label in li_constituents:
+        dwl_data = yf.download(product_label, multi_level_index=False, auto_adjust=False, start=str(year)+'-01-01', end=str(year)+'-12-31', actions=True)
+        dwl_data = pd.DataFrame(dwl_data[["Open","Close","Volume"]])
+        dwl_data["VolumeMillionUSD"] = ((dwl_data["Open"]+dwl_data["Close"])/2000000) * dwl_data["Volume"]
+        df_results.loc[product_label,"VolumeBillionUSD"] = dwl_data["VolumeMillionUSD"].sum()/1000
+
+
+
+    df_results = df_results.sort_values(by=["VolumeBillionUSD"], ascending=False)
+    total_traded_volume = df_results["VolumeBillionUSD"].sum()
+
+    print("The total traded volume of the constituents throughout "+str(year)+" was","{:.3f}".format(total_traded_volume),"billion USD.")
+    print("The total traded volume of",stock_ticker,"throughout " + str(year) + " was", "{:.3f}".format(df_results.loc[stock_ticker,"VolumeBillionUSD"]), "billion USD.")
+    print("This is a fraction of ","{:.3f}".format(100*(df_results.loc[stock_ticker,"VolumeBillionUSD"])/total_traded_volume),"%\n")
+    print("The list of the 20 most traded stocks of the SP500 during",year,"is:\n")
+    print(" Ticker   yearly traded  % of total  ")
+    print("             volume       USD-traded ")
+    print("          (billion USD)     volume")
+    for i in range(20):
+        print("  ",df_results.index[i],"     {:.1f}".format(df_results.iloc[i]["VolumeBillionUSD"]),"          {:.1f}".format(100*df_results.iloc[i]["VolumeBillionUSD"]/total_traded_volume))
+
+    return
 
 #---------------------------------------------------------------------------------------------------------------------
 
+def read_text_file(filepath='/Users/pablogarciarisueno/Desktop/raw2.txt'):
+
+    with open(filepath) as file:
+        lines = [line.rstrip() for line in file]
+
+    counter = 0
+    for i in range(2,len(lines)):
+        if ((lines[i-3]in["Buy","Sell","Neutral","Strong buy","Strong sell"]) and (lines[i]!="")):
+            counter +=1
+            ticker = lines[i]
+            ticker = ticker.split("GBP")[0]
+            ticker = ticker.split("USD")[0]
+            if not ("RECORDATI" in ticker):
+                ticker = ticker.split("ORD")[0]
+            print( ticker)
+    print("We found",counter,"tickers")
 
 #---------------------------------------------------------------------------------------------------------------------
 

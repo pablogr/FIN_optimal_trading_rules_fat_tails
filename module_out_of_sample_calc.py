@@ -1,10 +1,17 @@
-'''This module contains the functions necessary for the calculation of the profit out-of-sample.'''
+'''This module contains the functions necessary for the calculation of the profit out-of-sample.
+* We invest plus/minus ONE dollar in stock A;
+* We invest minus/plus \gamma dollars in stock B.
+If we set a dollar-neutral strategy in input.py, then gamma is simply the quotient between stock prices at t=0;
+otherwise, we use Vidyamurthy's cointegration approach, where \gamma is the slope of the regression between the
+COMMON TRENDS of the returs of stock_A vs the returns of the stock_B; in the case with one single risk factor,
+gamma = beta_A/beta_B, being beta_A, beta_B the slopes of the returns of the stocks A, B vs the MARKET returns.
+Note that this module does not consider the case of regime switching.
+'''
 
-
-from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from numpy import log2, exp
 import pandas as pd
+from sklearn import linear_model
 #pd.set_option('max_columns', 20)
 import gc
 from module_fitting import Spread, FittedTimeSeries, define_names
@@ -101,6 +108,7 @@ def create_df_results( prod_label_x, prod_label_y, spread_type, df_dates, list_d
     if ("genhyperbolic" in list_distribution_types): list_cols += ["ghyp_loc","ghyp_scale","ghyp_b_param","ghyp_a_param","ghyp_p_param","ghyp_loss"]
     if ("levy_stable" in list_distribution_types):   list_cols += ["stable_loc","stable_scale","stable_beta_param","stable_alpha_param","stable_loss"]
     list_cols += [ "time_horizon", "opt_enter_positive_spread", "opt_pt_positive_spread","opt_sl_positive_spread", "opt_enter_negative_spread", "opt_pt_negative_spread", "opt_sl_negative_spread" ]
+    list_cols += ["slope_common_trends_y_vs_x","slope_common_trends_x_vs_y"]
 
     df_results = df_dates.copy()
     df_results["spread_name"] = "spr_resid_"+prod_label_x+"_"+prod_label_y+"_"+spread_type+".csv" # e.g. spr_resid_MS_GS_y_vs_x.csv
@@ -151,6 +159,11 @@ def update_results( i, df_res, type_of_update, info_to_update, spread_type=None 
 
         for quantity in ["opt_enter_positive_spread", "opt_pt_positive_spread", "opt_sl_positive_spread", "opt_enter_negative_spread", "opt_pt_negative_spread", "opt_sl_negative_spread" ]:
             df_res.loc[i, quantity ] = info_to_update[ quantity ]
+
+    elif (type_of_update == "common_trends"):
+
+        df_res.loc[i, "slope_common_trends_y_vs_x"] = info_to_update[0]
+        df_res.loc[i, "slope_common_trends_x_vs_y"] = info_to_update[1]
 
     else:
 
@@ -240,7 +253,6 @@ def read_optimal_trading_rules( df_thresholds_one_period, quantity_to_analyse="S
     except UnboundLocalError:
         raise Exception("\n\nERROR: Please, make sure that <<list_enter_value>> in input.py contains both positive and negative values (e.g. \n<< list_enter_value = array( list( arange(-0.02500000001, -0.01000000000, 0.001) ) +  list( arange(0.010000000, 0.025000002, 0.001) ) ) >> ).\n")
 
-
     del df_thresholds_one_period; del quantity_to_analyse; del df_positive_en; del df_negative_en
 
     return opt_tr
@@ -248,18 +260,40 @@ def read_optimal_trading_rules( df_thresholds_one_period, quantity_to_analyse="S
 #--------------------------------------------------------------------------------------------------------------------
 
 def read_trading_rules( date_, df_tr, spread_enter_sign, verbose=0 ):
-    '''This function reads the trading rules to be applied on that date.'''
+    '''This function reads the trading rules to be applied on that date.'
+    IMPORTANT: # If the user set the stop-loss parameter to +/- infinity, we give it a finite value to limit huge losses 
+    which may arise from the fact that real, observed data (the data used in out-of-sample calculations) could indeed 
+    undergo a change of the mean-reverting parameter (E0), and such change of the mean-reverting parameter is NOT considered 
+    in the heat-map calculation of optimal trading rules (because the synthetic data do not consider regime switching).
+    '''
 
     E0=None; gamma=None; en=None; pt=None; sl=None;
 
     for i in df_tr.index:
         if ( (date_ >= df_tr.loc[i,"oos_initial_date"]) and (date_ <= df_tr.loc[i,"oos_final_date"] ) ):
+
             E0    = df_tr.loc[i,"OU_E0"]
-            gamma = df_tr.loc[i,"spread_gamma"]
-            assert(gamma>0)
+
+            #old: gamma = df_tr.loc[i,"spread_gamma"]
+            spread_name = df_tr.loc[i, "spread_name"]
+            if ("y_vs_x" in spread_name):
+                gamma = df_tr.loc[i, "slope_common_trends_y_vs_x"]
+            elif ("x_vs_y" in spread_name):
+                gamma = df_tr.loc[i,"slope_common_trends_x_vs_y"]
+            else:
+                raise Exception("ERROR: Make sure that either 'x_vs_y' or 'y_vs_x' are within the name of the spread: "+str(spread_name))
+
+            if((gamma<0.8) or (gamma>1/0.8)): # We expect gammas to be high because (if there is only one risk factor) they are the quotient between two betas of similar stocks.
+                print("\n WARNING: the gamma is",gamma,", which is an atypical value.\n  Check that this does indeed correspond to the constituents of your pair and that you feel comforatable with this value. \n")
+
             en = df_tr.loc[i, "opt_enter_"+spread_enter_sign+"_spread"]  # "ps" stands for "negative spread"
             pt = df_tr.loc[i, "opt_pt_"+spread_enter_sign+"_spread"]
             sl = df_tr.loc[i, "opt_sl_"+spread_enter_sign+"_spread"]
+            if (abs(sl)>100): # If the user set the stop-loss parameter to +/- infinity, we give it a finite value to limit huge losses which may arise from the fact that real, observed data (the data used in out-of-sample calculations) could indeed undergo a change of the mean-reverting parameter (E0), and such change of the mean-reverting parameter is NOT considered in the heat-map calculation of optimal trading rules (because the synthetic data do not consider regime switching).
+                if (en<0):
+                    sl = en + min( 2*en, -0.12 ) # We need to add the enter value (en) to "adapt" the thresholds.
+                elif (en>0):
+                    sl = en + max( 2*en, 0.12 )
             if (verbose>=0.5): print("-On",str(date_.strftime('%Y-%m-%d')),": E0=","{:.6f}".format(E0),";gamma=","{:.6f}".format(gamma),"; The trading rules are: enter=","{:.6f}".format(en),"; profit-taking=","{:.6f}".format(pt),"; stop-loss=","{:.6f}".format(sl))
             break
 
@@ -312,8 +346,13 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
 
     df_profits = pd.DataFrame(index=[my_index],columns=["total_profit_enter_positive_spread","N_enter_positive_spread","avg_price_long_position_enter_positive_spread","avg_cost_building_pair_enter_positive_spread","total_profit_enter_negative_spread","N_enter_negative_spread","avg_price_long_position_enter_negative_spread","avg_cost_building_pair_enter_negative_spread","total_profit","avg_price_long_position","avg_cost_building_pair"])
     df_profits.index.names = ['Spread_name']
-    cols_to_read_tr = ["oos_initial_date","oos_final_date","spread_gamma","spread_name","OU_E0","time_horizon","opt_enter_positive_spread","opt_pt_positive_spread","opt_sl_positive_spread","opt_enter_negative_spread","opt_pt_negative_spread","opt_sl_negative_spread"]
+    #cols_to_read_tr = ["oos_initial_date","oos_final_date","spread_gamma","spread_name","OU_E0","time_horizon","opt_enter_positive_spread","opt_pt_positive_spread","opt_sl_positive_spread","opt_enter_negative_spread","opt_pt_negative_spread","opt_sl_negative_spread"]
+    cols_to_read_tr = ["oos_initial_date", "oos_final_date", "spread_gamma", "spread_name", "OU_E0", "time_horizon",
+                       "opt_enter_positive_spread", "opt_pt_positive_spread", "opt_sl_positive_spread",
+                       "opt_enter_negative_spread", "opt_pt_negative_spread", "opt_sl_negative_spread","slope_common_trends_y_vs_x","slope_common_trends_x_vs_y"]
     df_tr = pd.read_csv(filepath_calibration_oos,header=0,usecols=cols_to_read_tr)
+
+
     df_tr["oos_initial_date"] = pd.to_datetime(df_tr["oos_initial_date"])
     df_tr["oos_final_date"]   = pd.to_datetime(df_tr["oos_final_date"])
     df_tr = df_tr.reset_index()
@@ -323,6 +362,7 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
 
     profit_neg_spread = 0
     invested = False
+    permitted_to_invest = True # This variable is set to False in the periods after a stop-loss trigger and a new arrival of the spread to E0+en.
     avg_enter_plong = 0
     avg_enter_cost = 0
     n_enter = 0
@@ -330,16 +370,28 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
     max_horizon =  round(input_params.list_max_horizon[0]*365/252)
     date0 = df_ts.index[0]
 
+    # last_date   = min(pd.to_datetime(input_params.last_oos_date,  infer_datetime_format=True), pd.to_datetime(df_ts.index[-1],  infer_datetime_format=True) )
+    #prod_label_A=x=SHEL ,prod_label_B=y=BP xx
+
     for date_ in df_ts.index:
 
         E0, gamma, en_ns, pt_ns, sl_ns = read_trading_rules( date_, df_tr, "negative", verbose )
+
         if (E0==None):continue
         spread = df_ts.loc[date_, prod_label_A + "_log_price_Close_corrected" ] - gamma * df_ts.loc[date_, prod_label_B + "_log_price_Close_corrected" ]
-        text1= ""; text2=""
+
+        text1 = "";  text2 = ""
+        if (not permitted_to_invest): # If we are in the aftermath of a stop-loss trigger, we avoid any operation until the spread has approached to E0 again. The reason why we do not fully discard any further operation is that: i) The stop-loss trigger may be a false alarm; ii) The mean may have undergone two regime switchings and thus have returned to its original value.
+            if (spread > E0 + en_ns):
+                permitted_to_invest = True
+                if (verbose >= 0.5): print(" The spread returned to reasonable values after a stop-loss, hence it is again allowed to invest.")
+            else:
+                continue
         if (verbose>=2): text1 = str(date_.strftime('%Y-%m-%d'))+ ") Spread="+ str("{:.6f}".format(spread))
-        if not (invested):
+        if not (invested): # Not invested
             spread = df_ts.loc[date_, prod_label_A + "_log_price_Close_corrected"] - gamma * df_ts.loc[date_, prod_label_B + "_log_price_Close_corrected"]
-            if ( ( spread < E0 ) and ( spread < E0 + en_ns ) ):
+            #old: if ( ( spread < E0 ) and ( spread < E0 + en_ns ) ):
+            if ((spread < E0) and (spread < E0 + en_ns) and (spread > E0 + 0.9*sl_ns ) ): # We avoid entering if we are too near from the stop-loss
                 invested = True
                 date_enter = date_
                 price_A_en = df_ts.loc[ date_, prod_label_A +"_price_Close_corrected" ] # "en" stands for "enter"
@@ -348,33 +400,42 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
                     gamma_en   = gamma
                 else: # We buy one dollar of stock of prod_label_y (ylabel) and sell gamma dollars of stock of prod_label_x (xlabel)
                     gamma_en = price_A_en / price_B_en
-                avg_enter_cost += price_A_en - gamma_en * price_B_en
-                avg_enter_plong += price_A_en
+                # We spend 1 currency unit in buying stock_A, and we short gamma currency units of stock_B, hence
+                # we buy 1/price_A_en units of stock_A, and we sell short gamma/price_B_en units of stock_B:
+                avg_enter_cost  += 1-gamma_en  # old: price_A_en - gamma_en * price_B_en
+                avg_enter_plong += 1  # old: price_A_en
                 n_enter += 1
                 if (verbose>=1): text1 = str(date_.strftime('%Y-%m-%d'))+ ") Spread="+ str("{:.6f}".format(spread))
                 if (verbose>=0.5):  text2 = " ==> Now entering; the price of "+str(prod_label_A)+ " is "+str("{:.2f}".format(price_A_en))+", the price of "+str(prod_label_B)+" is "+str("{:.2f}".format(price_B_en))
-        else: # invested
-            if ( (spread > E0 + pt_ns ) or (spread < E0 + sl_ns ) or ( date_ >= date_enter + timedelta(days = max_horizon) ) ):
-                if ( date_ >= date_enter + timedelta(days = max_horizon) ): print("Exiting due to max horizon.")
+        else: # Invested
+            if ( (spread > E0 + pt_ns ) or (spread < E0 + sl_ns ) or ( date_ >= date_enter + timedelta(days = max_horizon) )   ): # We do NOT consider profit if the time is over (date_>last_date), because that would be equivalent to unwinding the position against our will (in practice we would wait).
+                if ( date_ >= date_enter + timedelta(days = max_horizon) ):
+                    print("Exiting due to max horizon.")
                 price_A_ex = df_ts.loc[date_, prod_label_A + "_price_Close_corrected"]  # "ex" stands for "exit"
                 price_B_ex = df_ts.loc[date_, prod_label_B + "_price_Close_corrected"]
-                if (tcrate != None): tc = - tcrate * ( (date_ - date_enter).days / 365 ) * gamma_en * price_B_en # transaction cost (in units of currency). We multiply the rate by (gamma_en * price_B_en) because that is the amount of money which corresponds to the short position (borrowed stock).
+                if (tcrate != None): tc = - tcrate * ( (date_ - date_enter).days / 365 ) * gamma_en  # transaction cost (in units of currency). We multiply the rate by (gamma_en * price_B_en) because that is the amount of money which corresponds to the short position (borrowed stock).
                 else: tc = 0
                 if (discount_rate != None):  DF = exp(- discount_rate * ( (date_ - date0).days / 365 ) )
                 else: DF = 1
-                this_profit = ( ( price_A_ex - price_A_en ) - gamma_en * ( price_B_ex - price_B_en ) + tc ) * DF
+                #old: this_profit = ( ( price_A_ex - price_A_en ) - gamma_en * ( price_B_ex - price_B_en ) + tc ) * DF
+                # The variable below ("this_profit") represents how many dollars you have earned for every invested dollar (such invested dollar can be either long or short).
+                this_profit = tc + ( price_A_ex * DF - price_A_en )*(1/price_A_en) - ( price_B_ex * DF - price_B_en )*(gamma_en/price_B_en)
                 #print("Ndays=",(date_ - date0).days,"MYDATES=", date_, date0,"; DF=",DF,"; antes=",( ( price_A_ex - price_A_en ) - gamma_en * ( price_B_ex - price_B_en ) + tc ),";despues=",this_profit)
-                if ((this_profit>0) or ( date_ >= date_enter + timedelta(days = max_horizon)  ) ):
+                if ((this_profit>0) or (spread < E0 + sl_ns ) or ( date_ >= date_enter + timedelta(days = max_horizon)  )  ): # We do NOT consider profit if the time is over (date_>last_date), because that would be equivalent to unwinding the position against our will (in practice we would wait).
                     invested = False
                     profit_neg_spread += this_profit
-                    if (verbose >=0.5): print(" Now the tc was ",tc)
+                    #if (verbose >=0.5): print(" Now the tc was ",tc)
                     if (verbose>=1): text1 = str(date_.strftime('%Y-%m-%d'))+ ") Spread="+ str("{:.6f}".format(spread))
                     if (verbose >=0.5): text2 = "Spread exceeded " +str("{:.6f}".format(E0+pt_ns))+" ("+str("{:.4f}".format(E0))+"+("+str("{:.4f}".format(pt_ns))+")) ==> Now exiting; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_ex)) + ", the price of " + str(prod_label_B) + " is " + str("{:.2f}".format(price_B_ex)) + ".\n This profit was: "+str("{:.5f}".format(this_profit)) +" <---\n"
+                if (spread < E0 + sl_ns ):
+                    if (verbose >=0.5): print("Exiting due to stop loss trigger (negative spread). Spread:",spread,"E0:",E0,"sl:", sl_ns)
+                    permitted_to_invest = False
         if ((verbose>0) and ((text1!="")or(text2!="")) ): print( text1, text2)
 
+
     if (invested): # We omit the last enter, which we could not close
-        avg_enter_plong -= price_A_en
-        if not (input_params.oos_dollar_neutral): avg_enter_cost -= ( price_A_en - gamma_en * price_B_en  )
+        avg_enter_plong -= 1 #old: price_A_en
+        if not (input_params.oos_dollar_neutral): avg_enter_cost -= 1-gamma_en #old: ( price_A_en - gamma_en * price_B_en  )
         n_enter -= 1
 
     if (n_enter !=0):
@@ -398,6 +459,7 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
 
     profit_posit_spread = 0
     invested = False
+    permitted_to_invest = True  # This variable is set to False in the periods after a stop-loss trigger and a new arrival of the spread to E0+en.
     avg_enter_plong = 0
     avg_enter_cost = 0
     n_enter = 0
@@ -407,13 +469,21 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
     for date_ in df_ts.index:
 
         E0, gamma, en_ps, pt_ps, sl_ps = read_trading_rules(date_, df_tr, "positive", verbose)
+
         if (E0 == None): continue
         spread = df_ts.loc[date_, prod_label_A + "_log_price_Close_corrected"] - gamma * df_ts.loc[date_, prod_label_B + "_log_price_Close_corrected"]
         text1 = ""; text2 = ""
+        if (not permitted_to_invest): # If we are in the aftermath of a stop-loss trigger, we avoid any operation until the spread has approached to E0 again. The reason why we do not fully discard any further operation is that: i) The stop-loss trigger may be a false alarm; ii) The mean may have undergone two regime switchings and thus have returned to its original value.
+            if (spread < E0 + en_ps):
+                permitted_to_invest = True
+                if (verbose >= 0.5): print( " The spread returned to reasonable values after a stop-loss, hence it is again allowed to invest.")
+            else:
+                continue
         if (verbose >= 2): text1 = str(date_.strftime('%Y-%m-%d')) + ") Spread=" + str("{:.6f}".format(spread))
-        if not (invested):
+        if not (invested): # Not invested
             spread = df_ts.loc[date_, prod_label_A + "_log_price_Close_corrected"] - gamma * df_ts.loc[date_, prod_label_B + "_log_price_Close_corrected"]
-            if ((spread > E0) and (spread > E0 + en_ps)):
+            #old: if ((spread > E0) and (spread > E0 + en_ps)):
+            if ((spread > E0) and (spread > E0 + en_ps) and (spread < E0 + 0.9 * sl_ps) ):  # We avoid entering if we are too near from the stop-loss
                 invested = True
                 date_enter = date_
                 price_A_en = df_ts.loc[date_, prod_label_A + "_price_Close_corrected"]  # "en" stands for "enter"
@@ -422,34 +492,43 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
                     gamma_en = gamma
                 else: # We sell one dollar of stock of prod_label_y (ylabel) and buy gamma dollars of stock of prod_label_x (xlabel)
                     gamma_en = price_A_en / price_B_en
-                avg_enter_cost += -price_A_en + gamma_en * price_B_en
-                avg_enter_plong += gamma_en * price_B_en
+                #gamma_en = 0.982
+                # We spend 1 currency unit in buying stock_A, and we short gamma currency units of stock_B, hence
+                # we buy 1/price_A_en units of stock_A, and we sell short gamma/price_B_en units of stock_B:
+                avg_enter_cost  += gamma_en - 1 #old: -price_A_en + gamma_en * price_B_en
+                avg_enter_plong += gamma_en     #old: gamma_en * price_B_en
                 n_enter += 1
                 if (verbose == 1): text1 = str(date_.strftime('%Y-%m-%d')) + ") Spread=" + str("{:.6f}".format(spread))
                 if (verbose >=0.5):  text2 = " ==> Now entering; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_en)) + ", the price of " + str(prod_label_B) + " is " + str("{:.2f}".format(price_B_en))
         else:  # invested
-            if ((spread < E0 + pt_ps) or (spread > E0 + sl_ps) or (date_ >= date_enter + timedelta(days=max_horizon))):
+            if ((spread < E0 + pt_ps) or (spread > E0 + sl_ps) or (date_ >= date_enter + timedelta(days=max_horizon))  ):
                 if (date_ >= date_enter + timedelta(days=max_horizon)): print("Exitting due to max horizon.")
                 price_A_ex = df_ts.loc[date_, prod_label_A + "_price_Close_corrected"]  # "ex" stands for "exit"
                 price_B_ex = df_ts.loc[date_, prod_label_B + "_price_Close_corrected"]
-                if (tcrate != None): tc = - tcrate * ( (date_ - date_enter).days / 365 ) * price_A_en # transaction cost (in units of currency)
+                if (tcrate != None): tc = - tcrate * ( (date_ - date_enter).days / 365 )  # transaction cost (in units of currency)
                 else: tc = 0
                 if (discount_rate != None):  DF = exp(- discount_rate * ( (date_ - date0).days / 365 ) )
                 else: DF = 1
-                this_profit = ( -(price_A_ex - price_A_en) + gamma_en * (price_B_ex - price_B_en) + tc ) * DF
+                #old: this_profit = ( -(price_A_ex - price_A_en) + gamma_en * (price_B_ex - price_B_en) + tc ) * DF
+                this_profit = tc -(price_A_ex * DF - price_A_en) * (1 / price_A_en) + (price_B_ex * DF - price_B_en) * ( gamma_en / price_B_en)
                 #print("Ndays=", (date_ - date0).days, date_, date0, "; DF=", DF, "; antes=",  ((price_A_ex - price_A_en) - gamma_en * (price_B_ex - price_B_en) + tc), ";despues=", this_profit)
-                if ((this_profit > 0) or (date_ >= date_enter + timedelta(days=max_horizon))):
+                if ((this_profit > 0)  or (spread > E0 + sl_ps) or (date_ >= date_enter + timedelta(days=max_horizon)) ): # We do NOT consider profit if the time is over (date_>last_date), because that would be equivalent to unwinding the position against our will (in practice we would wait).
                     invested = False
-                    if (verbose > 0): print(" Now the tc was ", tc)
+                    #if (verbose > 0): print(" Now the tc was ", tc)
                     profit_posit_spread += this_profit
                     if (verbose >= 1): text1 = str(date_.strftime('%Y-%m-%d')) + ") Spread=" + str("{:.6f}".format(spread))
-                    if (verbose >=0.5):  text2 = "Spread exceeded " + str("{:.6f}".format(E0 + pt_ps)) + " (" + str("{:.4f}".format(E0)) + "+(" + str("{:.6f}".format(pt_ps)) + ")) ==> Now exiting; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_ex)) + ", the price of " + str(prod_label_B) + " is " + str( "{:.2f}".format(price_B_ex)) + ".\n This profit was: " + str("{:.5f}".format(this_profit)) + " <---\n"
+                    if (verbose >=0.5): text2 = "Spread exceeded " + str("{:.6f}".format(E0 + pt_ps)) + " (" + str("{:.4f}".format(E0)) + "+(" + str("{:.6f}".format(pt_ps)) + ")) ==> Now exiting; the price of " + str(prod_label_A) + " is " + str("{:.2f}".format(price_A_ex)) + ", the price of " + str(prod_label_B) + " is " + str( "{:.2f}".format(price_B_ex)) + ".\n This profit was: " + str("{:.5f}".format(this_profit)) + " <---\n"
+                if (spread > E0 + sl_ps):
+                    if (verbose >=0.5): print("Exiting due to stop loss trigger (positive spread). Spread:",spread,"E0:",E0,"sl:", sl_ps)
+                    permitted_to_invest = False
         if ((verbose > 0) and ((text1 != "") or (text2 != ""))): print(text1, text2)
 
+
     if (invested):  # We omit the last enter, which we could not close
-        avg_enter_plong -= gamma_en * price_B_en
-        avg_enter_cost -= (-price_A_en + gamma_en * price_B_en)
+        avg_enter_plong -= gamma_en     # old: gamma_en * price_B_en
+        avg_enter_cost  -= gamma_en - 1 # old: (-price_A_en + gamma_en * price_B_en)
         n_enter -= 1
+
 
     if (n_enter != 0):
         avg_enter_plong /= n_enter;
@@ -488,7 +567,7 @@ def oos_profit_measurement( input_params, prod_label_x, prod_label_y, spread_typ
 
         print(" ** The total profit is:", "{:.6f}".format(total_profit),"\n   The average price of the long position is:", "{:.4f}".format(avg_plong), "(", (N_enter_posit+N_enter_negat), " enters).")
         if not (input_params.oos_dollar_neutral):
-            print("   The average cost of building the pair is:", "{:.4f}".format(avg_ppair), ".\n")
+            print("   The average cost of building the pair is:", "{:.4f}".format(avg_ppair)+".\n")
     else:
         print("There were no enters, hence there was no profit.\n")
     #---
@@ -509,6 +588,7 @@ def calculate_oos_profits( input_params ):
     ii) Calculation of optimal trading rules;
     iii) Calculation of the out-of-sample profit, with observed prices.  '''
 
+
     # INITIALIZATION
     distrib_type = input_params.list_distribution_types[0]
     df_dates    = create_df_dates( input_params )
@@ -521,8 +601,13 @@ def calculate_oos_profits( input_params ):
     df_res = create_df_results( prod_label_x, prod_label_y, spread_type, df_dates, input_params.list_distribution_types, input_params.list_max_horizon )
     filename_resid, name_col_to_fit, filename_OrnUhl_params = define_names(input_params, products, "Spread_" + spread_type)
     filepath_calibration_oos = input_params.output_oos_dir + "/oos_calibration_"+file_suffix
+    path_common_trends = input_params.ts_directory + "/Spreads/gammas/common_trends__x_" + prod_label_x + "-y_" +  prod_label_y + ".csv"
+    df_ct = pd.read_csv(path_common_trends)
+    df_ct.set_index("Date",inplace=True)
 
     # CALCULATION OF OPTIMAL TRADING RULES
+
+    #"slope_common_trends_y_vs_x","slope_common_trends_x_vs_y"
 
     for i in df_dates.index:
 
@@ -530,8 +615,8 @@ def calculate_oos_profits( input_params ):
         date_end = df_dates.loc[i,"is_final_date"].strftime('%Y-%m-%d')
 
         # Fitting to Ornstein-Uhlenbeck (slope and intercept)
-        my_spread = Spread(input_params.input_directory, "out_of_sample", input_params.list_product_labels_name, prod_label_x, prod_label_y, date_beg, date_end )
-        my_spread.calc_spread(  )
+        my_spread = Spread(input_params.input_directory, "out_of_sample", input_params.list_product_labels_name, prod_label_x, prod_label_y, input_params.list_risk_factor_labels, date_beg, date_end )
+        my_spread.calc_spread(input_params)
         my_spread.calc_Ornstein_Uhlenbeck_parameters(False)
         df_res = update_results( i, df_res, "OU", my_spread, spread_type )
         OU_params = {'E0':df_res.loc[i,"OU_E0"], 'tau':-1/log2(df_res.loc[i,"OU_phi"]), 'phi':df_res.loc[i,"OU_phi"]  }                                # Parameters of the Ornstein-Uhlenbeck equation (see eq. (13.2) of Advances in Financial Machine Learning, by Marcos Lopez de Prado, 2018).
@@ -547,6 +632,11 @@ def calculate_oos_profits( input_params ):
         df_thresholds_one_period.to_csv( input_params.output_trad_rules_dir+"/trading_rules_"+file_suffix.replace(".csv",str(date_beg)+"_"+str(date_end)+".csv") )
         opt_tr = read_optimal_trading_rules( df_thresholds_one_period, input_params.quantity_to_analyse )
         df_res = update_results(i, df_res, "trading_rules", opt_tr )
+
+        df_ct_part = df_ct.loc[date_beg:date_end]
+        slope_ct_y_vs_x = linear_model.LinearRegression().fit( pd.DataFrame(df_ct_part["common_trend_x"]) ,pd.DataFrame(df_ct_part["common_trend_y"]) ).coef_[0][0]
+        slope_ct_x_vs_y = linear_model.LinearRegression().fit( pd.DataFrame(df_ct_part["common_trend_y"]),pd.DataFrame(df_ct_part["common_trend_x"])).coef_[0][0]
+        df_res = update_results(i, df_res, "common_trends", [slope_ct_y_vs_x ,slope_ct_x_vs_y] )
 
         del my_spread; del mydataset
         gc.collect()

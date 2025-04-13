@@ -1,5 +1,5 @@
 """
-
+This module contains the functions to download data from Yahoo Finance.
 """
 
 import pandas as pd
@@ -18,6 +18,7 @@ def calculate_returns( product_label, dwl_data, input_params ):
     '''
 
     kind_of_price = input_params.kind_of_price
+
 
     if ( ("Stock Splits" in list(dwl_data) ) and ( abs(dwl_data["Stock Splits"].sum())>0.00000001)  ):
         my_index = dwl_data["Stock Splits"].max()
@@ -70,14 +71,18 @@ def calculate_returns( product_label, dwl_data, input_params ):
 def download_ts( input_params ):
     '''This function downloads time-series from Yahoo Finance and stores them to files.'''
 
-    for product_label in input_params.list_product_labels:
+
+    list_to_download = input_params.list_product_labels.copy() + input_params.list_index_labels.copy()
+
+    for product_label in list_to_download:
         print("\n\n===================== Now downloading", product_label, "=====================\n")
 
-        # Download
+        # Download. See explanations in https://ranaroussi.github.io/yfinance/reference/api/yfinance.download.html#yfinance.download
         if ((input_params.first_downloaded_data_date == None) or (input_params.last_downloaded_data_date == None)):
-            dwl_data = yf.download(product_label, period=input_params.downloaded_data_period, interval=input_params.downloaded_data_freq,actions=True)
+            dwl_data = yf.download(product_label, multi_level_index=False, auto_adjust=False, period=input_params.downloaded_data_period, interval=input_params.downloaded_data_freq,actions=True)
         else:
-            dwl_data = yf.download(product_label, start=input_params.first_downloaded_data_date, end=input_params.last_downloaded_data_date,actions=True)
+            dwl_data = yf.download(product_label, multi_level_index=False, auto_adjust=False, start=input_params.first_downloaded_data_date, end=input_params.last_downloaded_data_date,actions=True)
+
 
         # Correction to 2 decimal places
         for colname in ["Open","High","Low","Close","Dividends"]:
@@ -96,13 +101,3 @@ def download_ts( input_params ):
 
 
 
-''' 
-# get ohlcv data for any ticker by period.
-data = yf.download("MSFT", period='1mo', interval="5m")
-
-# get ohlcv data for any ticker by start date and end date
-data = yf.download("MSFT", start="2017-01-01", end="2020-04-24")
-
-# get intraday data for any ticker by period.
-data = yf.download("MSFT", period='1mo', interval="5m")
-'''

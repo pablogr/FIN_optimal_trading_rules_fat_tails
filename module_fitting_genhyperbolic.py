@@ -244,7 +244,7 @@ def fit_to_genhyperbolic_local_minimum( dataset_in, max_n_iter, consider_skewnes
 #----------------------------------------------------------------------------------------------------------------------
 
 def fit_to_genhyperbolic_local_minimum_sweep_single_param( sp, dataset_in, max_n_iter, consider_skewness, consider_nonzero_p, lim_params, loc_param0, sca_param0, b_param0, a_param0, p_param0  ):
-    '''
+    ''' This fits to a single parameter (not all 5 of the generalized hyperbolic function).
     '''
 
     #np.random.seed(seed=1234366);random.seed(1033)
@@ -284,7 +284,6 @@ def fit_to_genhyperbolic_local_minimum_sweep_single_param( sp, dataset_in, max_n
         # Find the loss
         try:
             loss1 = - (np.sum( np.log( genhyperbolic.pdf(dataset_in, loc=loc_param0, scale=sca_param0, b=updp1['b'], a=updp1['a'], p=updp1['p'] ) ) ))/len(dataset_in)
-            #print("  --- En el try: Loss",loss1,"Params: loc=",loc_param0, "scale",sca_param0,"b",updp1['b'], "a",updp1['a'], "p",updp1['p'])
             if ((loss1 > 0) or isnan(loss1)):
                 break
         except RuntimeWarning:

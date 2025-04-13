@@ -11,14 +11,14 @@ from module_plots import save_and_plot_results, plot_heatmaps_pt_vs_en
 from numpy import log2
 from module_parameters import distribution_types_text
 
-#----------------------------------------------------------------------------------------
-
-def read_rv_params(input_params, prod_label, distr ):
+# ----------------------------------------------------------------------------------------
+def read_rv_params(input_params, prod_label, distr):
     '''This function reads the parameters of the random variable (and eventually also of the Ornstein-Uhlenbeck
     equation) from the corresponding file which stores them.'''
 
     df_prod = input_params.df_rv_params.loc[prod_label]
-    coddistr = {"Gaussian":'norm', "norm":'norm', "normal":'norm',"nct":'nct', "tstudent":'nct', 'genhyperbolic':'genhyperbolic', 'stable':'levy_stable', 'levy_stable':'levy_stable' }
+
+    coddistr = {"Gaussian":'norm', "norm":'norm', "normal":'norm',"nct":'nct',"johnsonsu":'johnsonsu', "tstudent":'nct', 'genhyperbolic':'genhyperbolic', 'stable':'levy_stable', 'levy_stable':'levy_stable' }
     distr = coddistr[distr]
 
     if (input_params.evolution_type == "Ornstein-Uhlenbeck_equation"):
@@ -33,8 +33,11 @@ def read_rv_params(input_params, prod_label, distr ):
         rv_params = {'product_label':prod_label, 'distribution_type': distr, 'mu': df_prod["normal_loc"], 'sigma': df_prod["normal_scale"], 'third_param': None,'fourth_param': None, 'fifth_param': None}
         print("   The Gaussian distribution of "+text+" has: mu=","{:.10f}".format(rv_params['mu']),"; sigma=","{:.8f}".format(rv_params['sigma']),"\n")
     elif (distr =='nct'):
-        rv_params = {'product_label':prod_label, 'distribution_type': distr,'mu': df_prod["nct_loc"], 'sigma': df_prod["nct_scale"], 'third_param': df_prod["nct_skparam"],'fourth_param': df_prod["nct_dfparam"], 'fifth_param': None}
+        rv_params = {'product_label':prod_label, 'distribution_type': distr,'mu': df_prod["nct_loc"], 'sigma': df_prod["nct_scale"], 'third_param': df_prod["nct_skparam"],'fourth_param': df_prod["nct_dfparam"], 'fifth_param.': None}
         print("   The non-centered t-student distribution of " + text + " has: mu=", "{:.10f}".format(rv_params['mu']), "; sigma=", "{:.8f}".format(rv_params['sigma']), "; skewness param.=","{:.6f}".format(rv_params['third_param']),"; num. DoF param=","{:.4f}".format(rv_params['fourth_param']),"\n")
+    elif (distr =='johnsonsu'):
+        rv_params = {'product_label':prod_label, 'distribution_type': distr,'mu': df_prod["johnsonsu_loc"], 'sigma': df_prod["johnsonsu_scale"], 'third_param': df_prod["johnsonsu_a_param"],'fourth_param': df_prod["johnsonsu_b_param"], 'fifth_param': None}
+        print("   The Johnson-SU distribution of " + text + " has: mu=", "{:.10f}".format(rv_params['mu']), "; sigma=", "{:.8f}".format(rv_params['sigma']), "; skewness param.=","{:.6f}".format(rv_params['third_param']),"; tail param.=","{:.4f}".format(rv_params['fourth_param']),"\n")
     elif (distr == 'genhyperbolic'):
         rv_params = {'product_label':prod_label, 'distribution_type': distr,'mu': df_prod["ghyp_loc"], 'sigma': df_prod["ghyp_scale"], 'third_param': df_prod["ghyp_b_param"],'fourth_param': df_prod["ghyp_a_param"], 'fifth_param': df_prod["ghyp_p_param"]}
         print("   The generalized hyperbolic distribution of " + text + " has: mu=", "{:.10f}".format(rv_params['mu']), "; sigma=", "{:.8f}".format(rv_params['sigma']),"; b (skewness) param.=", "{:.6f}".format(rv_params['third_param']), "; a param.=", "{:.4f}".format(rv_params['fourth_param']), "; p param.=", "{:.4f}".format(rv_params['fifth_param']),"\n")
@@ -47,7 +50,6 @@ def read_rv_params(input_params, prod_label, distr ):
     del input_params; del prod_label; del df_prod; del distr; del coddistr
 
     return OU_params, rv_params
-
 
 # ----------------------------------------------------------------------------------------
 
@@ -68,7 +70,7 @@ def sweep_enptsl_parameters( input_params ):
 
     df_out = pd.DataFrame()
 
-    if (input_params.path_rv_params==None): # Parameters of the random variable read from input.py
+    if (input_params.path_rv_params==None): # Parameters of the random variable read from input.py, self.path_rv_params not specified.
     
         list_E0       = input_params.list_E0
         list_tau      = input_params.list_tau
@@ -83,7 +85,6 @@ def sweep_enptsl_parameters( input_params ):
             for distrib in input_params.list_distribution_types:
                 for E0 in list_E0:
                     for tau in list_tau:
-                        #for mu, sigma, third_param, fourth_param, fifth_param in product(list_mu, list_sigma, list_3rdparam, list_4thparam, list_5thparam):
                         for mu in list_mu:
                             for sigma in list_sigma:
                                 for third_param in list_3rdparam:
@@ -120,11 +121,11 @@ def sweep_enptsl_parameters( input_params ):
                                         elif (input_params.output_type == "optimal_solution"):
                                             find_optimal_thresholds(input_params, rv_params  )
     
-    else:  # parameters of the random variable are read from file
+    else:  # parameters of the random variable are read from file <<<=============
     
         for prod_label in input_params.df_rv_params.index:
 
-            if (input_params.check_convergence_trading_rules): (pd.DataFrame(columns=["filepath"])).to_csv(input_params.dir_trading_rules_convergence + "/list_files_to_analyse_for_convergence.csv", index=False)
+            #xx if (input_params.check_convergence_trading_rules): (pd.DataFrame(columns=["filepath"])).to_csv(input_params.dir_trading_rules_convergence + "/list_files_to_analyse_for_convergence.csv", index=False)
 
             for distr_type in input_params.list_distribution_types:
 
